@@ -188,6 +188,7 @@ func createRequiredDirectories(cfg *config.Config) error {
 		cfg.Storage.OriginalsDir,
 		cfg.Storage.HLSDir,
 		cfg.Storage.ImportDir,
+		cfg.Storage.SubtitlesDir,
 	}
 
 	for _, dir := range dirs {

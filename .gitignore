@@ -26,8 +26,8 @@ data/
 *.db-shm
 *.db-wal
 
-# Config (if contains sensitive info)
-# config.yaml
+# Config (contains sensitive info)
+config.yaml
 
 # IDE
 .vscode/

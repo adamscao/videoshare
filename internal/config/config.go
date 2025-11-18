@@ -13,11 +13,14 @@ type Config struct {
 	Upload   UploadConfig   `yaml:"upload"`
 	FFmpeg   FFmpegConfig   `yaml:"ffmpeg"`
 	Session  SessionConfig  `yaml:"session"`
+	OpenAI   OpenAIConfig   `yaml:"openai"`
+	Subtitle SubtitleConfig `yaml:"subtitle"`
 }
 
 type ServerConfig struct {
-	Port int    `yaml:"port"`
-	Host string `yaml:"host"`
+	Port      int    `yaml:"port"`
+	Host      string `yaml:"host"`
+	GitHubURL string `yaml:"github_url"`
 }
 
 type DatabaseConfig struct {
@@ -25,15 +28,17 @@ type DatabaseConfig struct {
 }
 
 type StorageConfig struct {
-	VideosDir    string `yaml:"videos_dir"`
-	OriginalsDir string `yaml:"originals_dir"`
-	HLSDir       string `yaml:"hls_dir"`
-	ImportDir    string `yaml:"import_dir"`
+	VideosDir     string `yaml:"videos_dir"`
+	OriginalsDir  string `yaml:"originals_dir"`
+	HLSDir        string `yaml:"hls_dir"`
+	ImportDir     string `yaml:"import_dir"`
+	SubtitlesDir  string `yaml:"subtitles_dir"`
 }
 
 type UploadConfig struct {
-	MaxSize      int64    `yaml:"max_size"`
-	AllowedTypes []string `yaml:"allowed_types"`
+	MaxSize        int64    `yaml:"max_size"`
+	AllowedTypes   []string `yaml:"allowed_types"`
+	SubtitleTypes  []string `yaml:"subtitle_types"`
 }
 
 type FFmpegConfig struct {
@@ -46,6 +51,23 @@ type FFmpegConfig struct {
 type SessionConfig struct {
 	Secret string `yaml:"secret"`
 	MaxAge int    `yaml:"max_age"`
+}
+
+type OpenAIConfig struct {
+	APIKey           string `yaml:"api_key"`
+	APIBase          string `yaml:"api_base"`
+	WhisperModel     string `yaml:"whisper_model"`
+	TranslationModel string `yaml:"translation_model"`
+}
+
+type SubtitleConfig struct {
+	ChineseColor  string `yaml:"chinese_color"`
+	ChineseFont   string `yaml:"chinese_font"`
+	OriginalColor string `yaml:"original_color"`
+	OriginalFont  string `yaml:"original_font"`
+	FontSize      string `yaml:"font_size"`
+	Background    string `yaml:"background"`
+	Position      string `yaml:"position"`
 }
 
 var GlobalConfig *Config

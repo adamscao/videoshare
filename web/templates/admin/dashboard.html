@@ -325,7 +325,7 @@
                     <tr>
                         <td>
                             <div class="video-title">{{ .Title }}</div>
-                            <div class="video-slug">/v/{{ .Slug }}</div>
+                            <div class="video-slug"><a href="/v/{{ .Slug }}" target="_blank" style="color: #3498db; text-decoration: none;">/v/{{ .Slug }}</a></div>
                         </td>
                         <td>
                             {{ if .IsPasswordProtected }}

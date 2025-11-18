@@ -1,7 +1,7 @@
 server:
   port: 8080
   host: "0.0.0.0"
-  github_url: "https://github.com/adamscao/videoshare"
+  github_url: "https://github.com/yourusername/videoshare"  # Your GitHub repository URL
 
 database:
   path: "./data/videoshare.db"
@@ -37,15 +37,16 @@ session:
   max_age: 86400
 
 openai:
-  api_key: ""
-  api_base: "https://api.openai.com/v1"
+  api_key: ""  # Your OpenAI API key for Whisper transcription
+  api_base: "https://api.openai.com/v1"  # Optional: custom API endpoint
   whisper_model: "whisper-1"
-  translation_model: "gpt-4o-mini"
+  translation_model: "gpt-4o-mini"  # Model for translation
 
 subtitle:
-  chinese_color: "#00FF00"
+  # Subtitle style configuration
+  chinese_color: "#00FF00"  # Bright green for Chinese subtitles
   chinese_font: "KaiTi, 楷体, DejaVu Sans, sans-serif"
-  original_color: "#FFFF00"
+  original_color: "#FFFF00"  # Bright yellow for original non-Chinese subtitles
   original_font: "DejaVu Sans, sans-serif"
   font_size: "20px"
   background: "rgba(0, 0, 0, 0.7)"
