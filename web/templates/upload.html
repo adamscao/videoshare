@@ -208,9 +208,70 @@
         const subtitleInput = document.getElementById('subtitleFile');
         const subtitleInfo = document.getElementById('subtitleInfo');
 
+        // Language translations
+        const translations = {
+            zh: {
+                title: '🎬 视频分享平台',
+                uploadTitle: '上传视频',
+                dropHint: '点击或拖拽视频文件到这里',
+                videoTitle: '标题',
+                titlePlaceholder: '请输入视频标题',
+                description: '描述（可选）',
+                descPlaceholder: '请输入视频描述',
+                passwordProtect: '需要密码保护',
+                passwordPlaceholder: '请输入密码',
+                subtitle: '字幕文件（可选）',
+                supportFormats: '支持 SRT、VTT 格式',
+                uploadBtn: '开始上传',
+                uploading: '上传中...',
+                fileSelected: '已选择',
+                subtitlePrefix: '字幕:',
+                selectFile: '请选择视频文件',
+                uploadSuccess: '上传成功！',
+                playLink: '播放链接',
+                uploadFailed: '上传失败'
+            },
+            en: {
+                title: '🎬 Video Share Platform',
+                uploadTitle: 'Upload Video',
+                dropHint: 'Click or drag video file here',
+                videoTitle: 'Title',
+                titlePlaceholder: 'Enter video title',
+                description: 'Description (Optional)',
+                descPlaceholder: 'Enter video description',
+                passwordProtect: 'Password Protected',
+                passwordPlaceholder: 'Enter password',
+                subtitle: 'Subtitle File (Optional)',
+                supportFormats: 'Supports SRT, VTT formats',
+                uploadBtn: 'Start Upload',
+                uploading: 'Uploading...',
+                fileSelected: 'Selected',
+                subtitlePrefix: 'Subtitle:',
+                selectFile: 'Please select a video file',
+                uploadSuccess: 'Upload successful!',
+                playLink: 'Play link',
+                uploadFailed: 'Upload failed'
+            }
+        };
+
+        let currentLang = 'zh';
+
         function switchLang(lang) {
-            // Simple language switch - can be expanded
-            console.log('Switched to:', lang);
+            currentLang = lang;
+            const t = translations[lang];
+
+            document.querySelector('.header h1').textContent = t.title;
+            document.querySelector('.content h2').textContent = t.uploadTitle;
+            document.querySelector('.drop-hint').textContent = t.dropHint;
+            document.querySelectorAll('label')[0].childNodes[0].textContent = t.videoTitle;
+            document.getElementById('title').placeholder = t.titlePlaceholder;
+            document.querySelectorAll('label')[1].childNodes[0].textContent = t.description;
+            document.getElementById('description').placeholder = t.descPlaceholder;
+            document.querySelectorAll('.checkbox-label')[0].childNodes[1].textContent = ' ' + t.passwordProtect;
+            document.getElementById('videoPassword').placeholder = t.passwordPlaceholder;
+            document.querySelectorAll('label')[3].childNodes[0].textContent = t.subtitle;
+            document.querySelectorAll('label')[3].querySelector('span').textContent = t.supportFormats;
+            document.getElementById('uploadBtn').textContent = t.uploadBtn;
         }
 
         function togglePassword() {
@@ -224,14 +285,16 @@
             if (e.target.files[0]) {
                 const file = e.target.files[0];
                 const sizeMB = (file.size / 1024 / 1024).toFixed(2);
-                fileInfo.textContent = `已选择: ${file.name} (${sizeMB} MB)`;
+                const t = translations[currentLang];
+                fileInfo.textContent = `${t.fileSelected}: ${file.name} (${sizeMB} MB)`;
                 fileInfo.style.display = 'block';
             }
         };
 
         subtitleInput.onchange = (e) => {
             if (e.target.files[0]) {
-                subtitleInfo.textContent = `字幕: ${e.target.files[0].name}`;
+                const t = translations[currentLang];
+                subtitleInfo.textContent = `${t.subtitlePrefix} ${e.target.files[0].name}`;
                 subtitleInfo.style.display = 'block';
             }
         };
@@ -243,14 +306,20 @@
             uploadArea.style.background = '';
             if (e.dataTransfer.files[0]) {
                 fileInput.files = e.dataTransfer.files;
-                fileInput.onchange();
+                // Manually trigger file info display
+                const file = e.dataTransfer.files[0];
+                const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+                const t = translations[currentLang];
+                fileInfo.textContent = `${t.fileSelected}: ${file.name} (${sizeMB} MB)`;
+                fileInfo.style.display = 'block';
             }
         };
 
         document.getElementById('uploadForm').onsubmit = async (e) => {
             e.preventDefault();
             const file = fileInput.files[0];
-            if (!file) { alert('请选择视频文件'); return; }
+            const t = translations[currentLang];
+            if (!file) { alert(t.selectFile); return; }
 
             const formData = new FormData();
             formData.append('video', file);
@@ -276,20 +345,21 @@
                 }
             };
             xhr.onload = () => {
+                const t = translations[currentLang];
                 document.getElementById('uploadBtn').disabled = false;
                 document.getElementById('progress').style.display = 'none';
                 if (xhr.status === 200) {
                     const res = JSON.parse(xhr.responseText);
                     document.getElementById('result').innerHTML = `
-                        <p>✅ 上传成功！</p>
-                        <p style="margin-top:10px;">播放链接: <a href="${res.url}" target="_blank">${location.origin}${res.url}</a></p>
+                        <p>✅ ${t.uploadSuccess}</p>
+                        <p style="margin-top:10px;">${t.playLink}: <a href="${res.url}" target="_blank">${location.origin}${res.url}</a></p>
                     `;
                     document.getElementById('result').style.display = 'block';
                     document.getElementById('uploadForm').reset();
                     fileInfo.style.display = 'none';
                     subtitleInfo.style.display = 'none';
                 } else {
-                    alert('上传失败');
+                    alert(t.uploadFailed);
                 }
             };
             xhr.open('POST', '/api/upload');

@@ -58,6 +58,8 @@ type OpenAIConfig struct {
 	APIBase          string `yaml:"api_base"`
 	WhisperModel     string `yaml:"whisper_model"`
 	TranslationModel string `yaml:"translation_model"`
+	UseLocalWhisper  bool   `yaml:"use_local_whisper"`  // Use local whisper command instead of API
+	WhisperPath      string `yaml:"whisper_path"`       // Path to local whisper executable
 }
 
 type SubtitleConfig struct {

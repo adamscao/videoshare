@@ -37,10 +37,15 @@ session:
   max_age: 86400
 
 openai:
+  # Choose between local whisper or OpenAI API
+  use_local_whisper: true  # Set to true to use local whisper command, false for OpenAI API
+  whisper_path: "whisper"  # Path to local whisper executable (leave empty to use PATH)
+  whisper_model: "small"   # For local: tiny/base/small/medium/large, For API: whisper-1
+
+  # OpenAI API settings (only needed if use_local_whisper is false)
   api_key: ""  # Your OpenAI API key for Whisper transcription
   api_base: "https://api.openai.com/v1"  # Optional: custom API endpoint
-  whisper_model: "whisper-1"
-  translation_model: "gpt-4o-mini"  # Model for translation
+  translation_model: "gpt-4o-mini"  # Model for translation (needed for non-Chinese videos)
 
 subtitle:
   # Subtitle style configuration
