@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/adamscao/videoshare/internal/config"
 	"github.com/adamscao/videoshare/internal/database"

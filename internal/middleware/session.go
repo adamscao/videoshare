@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"net/http"
+
 	"github.com/adamscao/videoshare/internal/config"
 	"github.com/gorilla/sessions"
 )
@@ -23,7 +25,7 @@ func InitSessions(cfg *config.Config) {
 		Path:     "/",
 		MaxAge:   cfg.Session.MaxAge,
 		HttpOnly: true,
-		SameSite: sessions.SameSiteLaxMode,
+		SameSite: http.SameSiteLaxMode,
 	}
 
 	VideoSessionStore = sessions.NewCookieStore(secret)
@@ -31,6 +33,6 @@ func InitSessions(cfg *config.Config) {
 		Path:     "/",
 		MaxAge:   cfg.Session.MaxAge,
 		HttpOnly: true,
-		SameSite: sessions.SameSiteLaxMode,
+		SameSite: http.SameSiteLaxMode,
 	}
 }
