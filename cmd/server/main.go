@@ -78,7 +78,7 @@ func setupRouter(
 	r := gin.Default()
 
 	// Set custom template functions
-	r.SetFuncMap(template.FuncMap{
+	funcMap := template.FuncMap{
 		"divf": func(a interface{}, b interface{}) float64 {
 			var af, bf float64
 			switch v := a.(type) {
@@ -106,10 +106,12 @@ func setupRouter(
 			}
 			return af / bf
 		},
-	})
+	}
 
-	// Load templates
-	r.LoadHTMLGlob("web/templates/**/*")
+	// Load all templates manually
+	tmpl := template.Must(template.New("").Funcs(funcMap).ParseGlob("web/templates/*.html"))
+	tmpl = template.Must(tmpl.ParseGlob("web/templates/admin/*.html"))
+	r.SetHTMLTemplate(tmpl)
 
 	// Serve static files
 	r.Static("/static", "./web/static")
