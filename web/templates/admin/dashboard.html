@@ -311,7 +311,14 @@
         </div>
 
         <div class="videos-panel">
-            <h2>视频列表 ({{ len .videos }} 个视频)</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2>视频列表 (<span id="videoCount">{{ len .videos }}</span> 个视频)</h2>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="searchInput" placeholder="🔍 搜索视频标题、大小..."
+                           style="padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 6px; width: 300px;">
+                    <button class="btn btn-secondary" onclick="clearSearch()" style="padding: 8px 16px;">清空</button>
+                </div>
+            </div>
 
             {{ if .videos }}
             <table>
@@ -327,7 +334,9 @@
                 </thead>
                 <tbody id="videosTable">
                     {{ range .videos }}
-                    <tr>
+                    <tr data-title="{{ .Title }}"
+                        data-size="{{ printf "%.2f" (divf .FileSize 1048576) }}"
+                        data-date="{{ .CreatedAt.Format "2006-01-02 15:04" }}">
                         <td>
                             <div class="video-title">{{ .Title }}</div>
                             <div class="video-slug"><a href="/v/{{ .Slug }}" target="_blank" style="color: #3498db; text-decoration: none;">/v/{{ .Slug }}</a></div>
@@ -408,6 +417,46 @@
     <div id="notification" class="notification"></div>
 
     <script>
+        // Search functionality
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.addEventListener('input', function(e) {
+                const searchTerm = e.target.value.toLowerCase().trim();
+                const rows = document.querySelectorAll('#videosTable tr');
+                let visibleCount = 0;
+
+                rows.forEach(row => {
+                    const title = row.getAttribute('data-title') || '';
+                    const size = row.getAttribute('data-size') || '';
+                    const date = row.getAttribute('data-date') || '';
+
+                    const searchText = `${title} ${size} ${date}`.toLowerCase();
+
+                    if (searchText.includes(searchTerm)) {
+                        row.style.display = '';
+                        visibleCount++;
+                    } else {
+                        row.style.display = 'none';
+                    }
+                });
+
+                // Update count
+                document.getElementById('videoCount').textContent = visibleCount;
+            });
+        }
+
+        function clearSearch() {
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.value = '';
+                const rows = document.querySelectorAll('#videosTable tr');
+                rows.forEach(row => {
+                    row.style.display = '';
+                });
+                document.getElementById('videoCount').textContent = rows.length;
+            }
+        }
+
         // Upload permission toggle
         document.getElementById('uploadPermission').addEventListener('change', async (e) => {
             const permission = e.target.checked ? 'public' : 'admin';
