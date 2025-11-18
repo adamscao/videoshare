@@ -51,12 +51,13 @@ func main() {
 	videoService := service.NewVideoService(cfg, hlsService)
 	importService := service.NewImportService(cfg, videoService)
 	authService := service.NewAuthService()
+	subtitleService := service.NewSubtitleService(cfg)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	uploadHandler := handler.NewUploadHandler(cfg, videoService)
 	videoHandler := handler.NewVideoHandler(videoService)
-	adminHandler := handler.NewAdminHandler(videoService, importService)
+	adminHandler := handler.NewAdminHandler(videoService, importService, subtitleService)
 
 	// Setup router
 	r := setupRouter(authHandler, uploadHandler, videoHandler, adminHandler)
@@ -156,6 +157,8 @@ func setupRouter(
 		adminAPI.POST("/import", adminHandler.ImportVideos)
 		adminAPI.GET("/settings", adminHandler.GetSettings)
 		adminAPI.PUT("/settings", adminHandler.UpdateSettings)
+		adminAPI.POST("/videos/:id/generate-subtitle", adminHandler.GenerateSubtitle)
+		adminAPI.POST("/videos/:id/upload-subtitle", adminHandler.UploadSubtitle)
 	}
 
 	return r

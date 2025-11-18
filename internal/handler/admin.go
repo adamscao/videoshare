@@ -11,14 +11,16 @@ import (
 )
 
 type AdminHandler struct {
-	videoService  *service.VideoService
-	importService *service.ImportService
+	videoService    *service.VideoService
+	importService   *service.ImportService
+	subtitleService *service.SubtitleService
 }
 
-func NewAdminHandler(videoService *service.VideoService, importService *service.ImportService) *AdminHandler {
+func NewAdminHandler(videoService *service.VideoService, importService *service.ImportService, subtitleService *service.SubtitleService) *AdminHandler {
 	return &AdminHandler{
-		videoService:  videoService,
-		importService: importService,
+		videoService:    videoService,
+		importService:   importService,
+		subtitleService: subtitleService,
 	}
 }
 
@@ -185,4 +187,78 @@ func (h *AdminHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// GenerateSubtitle generates subtitle for a video using Whisper API
+func (h *AdminHandler) GenerateSubtitle(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+		return
+	}
+
+	var video models.Video
+	if err := database.DB.First(&video, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	}
+
+	// Generate subtitle in background (this might take a while)
+	go func() {
+		h.subtitleService.GenerateSubtitle(uint(id), video.OriginalPath)
+	}()
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Subtitle generation started. This may take a few minutes.",
+	})
+}
+
+// UploadSubtitle handles subtitle file upload
+func (h *AdminHandler) UploadSubtitle(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid video ID"})
+		return
+	}
+
+	var video models.Video
+	if err := database.DB.First(&video, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	}
+
+	file, err := c.FormFile("subtitle")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No subtitle file provided"})
+		return
+	}
+
+	// Read file content
+	openedFile, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file"})
+		return
+	}
+	defer openedFile.Close()
+
+	content := make([]byte, file.Size)
+	_, err = openedFile.Read(content)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read file"})
+		return
+	}
+
+	// Save subtitle
+	subtitlePath, err := h.subtitleService.SaveUploadedSubtitle(video.Slug, content)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save subtitle"})
+		return
+	}
+
+	// Update video record
+	database.DB.Model(&video).Update("subtitle_path", subtitlePath)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "subtitle_path": subtitlePath})
 }
