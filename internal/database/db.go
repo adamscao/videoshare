@@ -1,6 +1,9 @@
 package database
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/adamscao/videoshare/internal/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -11,6 +14,12 @@ var DB *gorm.DB
 
 // InitDB initializes database connection
 func InitDB(dbPath string) error {
+	// Create database directory if it doesn't exist
+	dbDir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		return err
+	}
+
 	var err error
 	DB, err = gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),

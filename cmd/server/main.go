@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/adamscao/videoshare/internal/config"
 	"github.com/adamscao/videoshare/internal/database"
@@ -28,6 +29,11 @@ func main() {
 	// Initialize database
 	if err := database.InitDB(cfg.Database.Path); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// Create required directories
+	if err := createRequiredDirectories(cfg); err != nil {
+		log.Fatalf("Failed to create directories: %v", err)
 	}
 
 	// Initialize sessions
@@ -140,4 +146,21 @@ func initializeAdmin() {
 	}
 
 	fmt.Println("Admin user created successfully!")
+}
+
+func createRequiredDirectories(cfg *config.Config) error {
+	dirs := []string{
+		cfg.Storage.VideosDir,
+		cfg.Storage.OriginalsDir,
+		cfg.Storage.HLSDir,
+		cfg.Storage.ImportDir,
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
