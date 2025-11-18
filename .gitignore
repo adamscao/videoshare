@@ -1,5 +1,7 @@
 # Binaries
 videoshare
+server
+videocli
 *.exe
 *.dll
 *.so
@@ -46,3 +48,4 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+*.bak
