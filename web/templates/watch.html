@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ .video.Title }} - VideoShare</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #0f0f0f;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .video-container {
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .info-container {
+            background: #212121;
+            border-radius: 12px;
+            padding: 24px;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 16px;
+            color: #fff;
+        }
+        .description {
+            color: #aaa;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        .meta {
+            display: flex;
+            gap: 20px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #333;
+            color: #888;
+            font-size: 14px;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #3ea6ff;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Subtitle styles */
+        video::cue {
+            font-size: {{ .subtitleConfig.FontSize }};
+            background: {{ .subtitleConfig.Background }};
+        }
+
+        /* Chinese subtitle style */
+        video::cue(v[voice="chinese"]) {
+            color: {{ .subtitleConfig.ChineseColor }} !important;
+            font-family: {{ .subtitleConfig.ChineseFont }};
+        }
+
+        /* Original subtitle style */
+        video::cue(v[voice="original"]) {
+            color: {{ .subtitleConfig.OriginalColor }} !important;
+            font-family: {{ .subtitleConfig.OriginalFont }};
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/upload" class="back-link">← 返回上传页面</a>
+
+        <div class="video-container">
+            <video id="video" controls>
+                {{ if .video.SubtitlePath }}
+                <track kind="subtitles"
+                       src="/subtitles/{{ .slug }}.vtt"
+                       srclang="zh"
+                       label="中文"
+                       default>
+                {{ end }}
+            </video>
+        </div>
+
+        <div class="info-container">
+            <h1>{{ .video.Title }}</h1>
+            {{ if .video.Description }}
+            <div class="description">{{ .video.Description }}</div>
+            {{ end }}
+            <div class="meta">
+                <span>📅 {{ .video.CreatedAt.Format "2006-01-02 15:04" }}</span>
+                {{ if .video.Duration }}
+                <span>⏱️ {{ .video.Duration }} 秒</span>
+                {{ end }}
+                {{ if .video.FileSize }}
+                <span>💾 {{ printf "%.2f" (divf .video.FileSize 1048576) }} MB</span>
+                {{ end }}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const videoSrc = '/hls/{{ .slug }}/playlist.m3u8';
+
+        if (Hls.isSupported()) {
+            const hls = new Hls();
+            hls.loadSource(videoSrc);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                video.play();
+            });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = videoSrc;
+            video.addEventListener('loadedmetadata', function() {
+                video.play();
+            });
+        } else {
+            alert('您的浏览器不支持 HLS 播放');
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+  github_url: "https://github.com/adamscao/videoshare"
+
+database:
+  path: "./data/videoshare.db"
+
+storage:
+  videos_dir: "./data/videos"
+  originals_dir: "./data/videos/originals"
+  hls_dir: "./data/videos/hls"
+  import_dir: "./data/import"
+  subtitles_dir: "./data/videos/subtitles"
+
+upload:
+  max_size: 5368709120  # 5GB
+  allowed_types:
+    - video/mp4
+    - video/x-matroska
+    - video/avi
+    - video/quicktime
+    - video/x-msvideo
+  subtitle_types:
+    - text/vtt
+    - application/x-subrip
+    - text/plain
+
+ffmpeg:
+  path: "ffmpeg"
+  ffprobe_path: "ffprobe"
+  hls_time: 10
+  hls_segment_filename: "segment_%03d.ts"
+
+session:
+  secret: "change-this-secret-key-in-production"
+  max_age: 86400
+
+openai:
+  api_key: ""
+  api_base: "https://api.openai.com/v1"
+  whisper_model: "whisper-1"
+  translation_model: "gpt-4o-mini"
+
+subtitle:
+  chinese_color: "#00FF00"
+  chinese_font: "KaiTi, 楷体, DejaVu Sans, sans-serif"
+  original_color: "#FFFF00"
+  original_font: "DejaVu Sans, sans-serif"
+  font_size: "20px"
+  background: "rgba(0, 0, 0, 0.7)"
+  position: "bottom"

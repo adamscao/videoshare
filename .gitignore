@@ -1,0 +1,51 @@
+# Binaries
+videoshare
+server
+videocli
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Data directory
+data/
+!data/.gitkeep
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Config (contains sensitive info)
+config.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.bak
