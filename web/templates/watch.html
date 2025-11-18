@@ -74,14 +74,14 @@
         }
 
         /* Chinese subtitle style */
-        video::cue(v.chinese) {
-            color: {{ .subtitleConfig.ChineseColor }};
+        video::cue(v[voice="chinese"]) {
+            color: {{ .subtitleConfig.ChineseColor }} !important;
             font-family: {{ .subtitleConfig.ChineseFont }};
         }
 
         /* Original subtitle style */
-        video::cue(v.original) {
-            color: {{ .subtitleConfig.OriginalColor }};
+        video::cue(v[voice="original"]) {
+            color: {{ .subtitleConfig.OriginalColor }} !important;
             font-family: {{ .subtitleConfig.OriginalFont }};
         }
     </style>

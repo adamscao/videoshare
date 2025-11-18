@@ -150,44 +150,44 @@
     </div>
 
     <div class="container">
-        <h2>📤 上传视频</h2>
+        <h2 id="uploadTitle">📤 上传视频</h2>
         <form id="uploadForm">
             <div class="upload-area" id="uploadArea">
                 <p style="font-size: 48px;">📁</p>
-                <p style="color: #667eea; font-size: 18px; margin: 10px 0;">点击或拖拽上传视频</p>
-                <p style="color: #999; font-size: 14px;">支持 MP4, AVI, MKV, MOV 等格式</p>
+                <p id="dropHint" style="color: #667eea; font-size: 18px; margin: 10px 0;">点击或拖拽上传视频</p>
+                <p id="formatHint" style="color: #999; font-size: 14px;">支持 MP4, AVI, MKV, MOV 等格式</p>
                 <input type="file" id="videoFile" accept="video/*" required>
             </div>
             <div class="file-info" id="fileInfo" style="display:none;"></div>
 
             <div class="form-group">
-                <label>视频标题 (可选)</label>
+                <label id="titleLabel">视频标题 (可选)</label>
                 <input type="text" id="title" placeholder="留空则使用文件名">
             </div>
 
             <div class="form-group">
-                <label>视频描述 (可选)</label>
+                <label id="descLabel">视频描述 (可选)</label>
                 <textarea id="description" placeholder="描述这个视频..."></textarea>
             </div>
 
             <div class="form-group">
                 <div class="checkbox-group" onclick="document.getElementById('passwordProtected').click()">
                     <input type="checkbox" id="passwordProtected" onclick="event.stopPropagation(); togglePassword()">
-                    <label>设置密码保护</label>
+                    <label id="passwordLabel">设置密码保护</label>
                 </div>
             </div>
 
             <div class="form-group" id="passwordField" style="display:none;">
-                <label>视频密码</label>
+                <label id="passwordFieldLabel">视频密码</label>
                 <input type="password" id="videoPassword" placeholder="输入密码...">
             </div>
 
             <div class="form-group">
-                <label>字幕文件 (可选)</label>
+                <label id="subtitleLabel">字幕文件 (可选)</label>
                 <label for="subtitleFile" class="file-input-label">📄 选择字幕文件</label>
                 <input type="file" id="subtitleFile" accept=".srt,.vtt,.txt">
                 <div class="file-info" id="subtitleInfo"></div>
-                <p class="hint">支持 SRT, VTT 格式</p>
+                <p class="hint" id="subtitleHint">支持 SRT, VTT 格式</p>
             </div>
 
             <button type="submit" class="btn" id="uploadBtn">开始上传</button>
@@ -212,16 +212,18 @@
         const translations = {
             zh: {
                 title: '🎬 视频分享平台',
-                uploadTitle: '上传视频',
-                dropHint: '点击或拖拽视频文件到这里',
-                videoTitle: '标题',
-                titlePlaceholder: '请输入视频标题',
-                description: '描述（可选）',
-                descPlaceholder: '请输入视频描述',
-                passwordProtect: '需要密码保护',
-                passwordPlaceholder: '请输入密码',
-                subtitle: '字幕文件（可选）',
-                supportFormats: '支持 SRT、VTT 格式',
+                uploadTitle: '📤 上传视频',
+                dropHint: '点击或拖拽上传视频',
+                formatHint: '支持 MP4, AVI, MKV, MOV 等格式',
+                titleLabel: '视频标题 (可选)',
+                titlePlaceholder: '留空则使用文件名',
+                descLabel: '视频描述 (可选)',
+                descPlaceholder: '描述这个视频...',
+                passwordLabel: '设置密码保护',
+                passwordFieldLabel: '视频密码',
+                passwordPlaceholder: '输入密码...',
+                subtitleLabel: '字幕文件 (可选)',
+                subtitleHint: '支持 SRT, VTT 格式',
                 uploadBtn: '开始上传',
                 uploading: '上传中...',
                 fileSelected: '已选择',
@@ -233,16 +235,18 @@
             },
             en: {
                 title: '🎬 Video Share Platform',
-                uploadTitle: 'Upload Video',
-                dropHint: 'Click or drag video file here',
-                videoTitle: 'Title',
-                titlePlaceholder: 'Enter video title',
-                description: 'Description (Optional)',
-                descPlaceholder: 'Enter video description',
-                passwordProtect: 'Password Protected',
-                passwordPlaceholder: 'Enter password',
-                subtitle: 'Subtitle File (Optional)',
-                supportFormats: 'Supports SRT, VTT formats',
+                uploadTitle: '📤 Upload Video',
+                dropHint: 'Click or drag to upload video',
+                formatHint: 'Supports MP4, AVI, MKV, MOV formats',
+                titleLabel: 'Video Title (Optional)',
+                titlePlaceholder: 'Leave blank to use filename',
+                descLabel: 'Video Description (Optional)',
+                descPlaceholder: 'Describe this video...',
+                passwordLabel: 'Set Password Protection',
+                passwordFieldLabel: 'Video Password',
+                passwordPlaceholder: 'Enter password...',
+                subtitleLabel: 'Subtitle File (Optional)',
+                subtitleHint: 'Supports SRT, VTT formats',
                 uploadBtn: 'Start Upload',
                 uploading: 'Uploading...',
                 fileSelected: 'Selected',
@@ -260,18 +264,27 @@
             currentLang = lang;
             const t = translations[lang];
 
+            // Update all text elements
             document.querySelector('.header h1').textContent = t.title;
-            document.querySelector('.content h2').textContent = t.uploadTitle;
-            document.querySelector('.drop-hint').textContent = t.dropHint;
-            document.querySelectorAll('label')[0].childNodes[0].textContent = t.videoTitle;
+            document.getElementById('uploadTitle').textContent = t.uploadTitle;
+            document.getElementById('dropHint').textContent = t.dropHint;
+            document.getElementById('formatHint').textContent = t.formatHint;
+            document.getElementById('titleLabel').textContent = t.titleLabel;
             document.getElementById('title').placeholder = t.titlePlaceholder;
-            document.querySelectorAll('label')[1].childNodes[0].textContent = t.description;
+            document.getElementById('descLabel').textContent = t.descLabel;
             document.getElementById('description').placeholder = t.descPlaceholder;
-            document.querySelectorAll('.checkbox-label')[0].childNodes[1].textContent = ' ' + t.passwordProtect;
+            document.getElementById('passwordLabel').textContent = t.passwordLabel;
+            document.getElementById('passwordFieldLabel').textContent = t.passwordFieldLabel;
             document.getElementById('videoPassword').placeholder = t.passwordPlaceholder;
-            document.querySelectorAll('label')[3].childNodes[0].textContent = t.subtitle;
-            document.querySelectorAll('label')[3].querySelector('span').textContent = t.supportFormats;
+            document.getElementById('subtitleLabel').textContent = t.subtitleLabel;
+            document.getElementById('subtitleHint').textContent = t.subtitleHint;
             document.getElementById('uploadBtn').textContent = t.uploadBtn;
+
+            // Update active button
+            document.querySelectorAll('.lang-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
         }
 
         function togglePassword() {

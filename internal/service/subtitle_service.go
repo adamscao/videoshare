@@ -8,7 +8,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -53,20 +52,10 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (stri
 		return "", err
 	}
 
-	// Call Whisper (local or API)
-	var transcription string
-	var err error
-
-	if s.config.OpenAI.UseLocalWhisper {
-		transcription, err = s.callLocalWhisper(videoPath)
-		if err != nil {
-			return "", fmt.Errorf("local whisper error: %w", err)
-		}
-	} else {
-		transcription, err = s.callWhisperAPI(videoPath)
-		if err != nil {
-			return "", fmt.Errorf("whisper API error: %w", err)
-		}
+	// Call Whisper API
+	transcription, err := s.callWhisperAPI(videoPath)
+	if err != nil {
+		return "", fmt.Errorf("whisper API error: %w", err)
 	}
 
 	// Detect if text is Chinese
@@ -143,56 +132,6 @@ func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
 	}
 
 	return string(responseBody), nil
-}
-
-// callLocalWhisper calls local whisper command line tool
-func (s *SubtitleService) callLocalWhisper(videoPath string) (string, error) {
-	// Determine whisper executable path
-	whisperPath := s.config.OpenAI.WhisperPath
-	if whisperPath == "" {
-		whisperPath = "whisper" // Use PATH
-	}
-
-	// Create temporary directory for output
-	tempDir, err := os.MkdirTemp("", "whisper-*")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Build whisper command
-	// whisper videofile.mp4 --model small --output_format txt --output_dir /tmp/dir
-	args := []string{
-		videoPath,
-		"--model", s.config.OpenAI.WhisperModel,
-		"--output_format", "txt",
-		"--output_dir", tempDir,
-		"--language", "auto", // Auto-detect language
-	}
-
-	cmd := exec.Command(whisperPath, args...)
-
-	// Capture output for debugging
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Run whisper
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("whisper command failed: %w, stderr: %s", err, stderr.String())
-	}
-
-	// Read output file
-	// Whisper outputs filename.txt
-	baseName := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
-	outputFile := filepath.Join(tempDir, baseName+".txt")
-
-	content, err := os.ReadFile(outputFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to read whisper output: %w", err)
-	}
-
-	return strings.TrimSpace(string(content)), nil
 }
 
 // translateToChinese translates text to Chinese using OpenAI API
@@ -274,8 +213,8 @@ func (s *SubtitleService) convertToVTT(original, translation string) string {
 
 		if translation != "" && i < len(translatedSentences) {
 			// Bilingual subtitle
-			vtt.WriteString(fmt.Sprintf("<v.original>%s</v>\n", strings.TrimSpace(sentence)))
-			vtt.WriteString(fmt.Sprintf("<v.chinese>%s</v>\n", strings.TrimSpace(translatedSentences[i])))
+			vtt.WriteString(fmt.Sprintf("<v original>%s</v>\n", strings.TrimSpace(sentence)))
+			vtt.WriteString(fmt.Sprintf("<v chinese>%s</v>\n", strings.TrimSpace(translatedSentences[i])))
 		} else {
 			// Single language
 			vtt.WriteString(fmt.Sprintf("%s\n", strings.TrimSpace(sentence)))
