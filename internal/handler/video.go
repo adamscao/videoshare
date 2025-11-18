@@ -89,15 +89,13 @@ func (h *VideoHandler) VerifyVideoPassword(c *gin.Context) {
 		return
 	}
 
-	// Save to session
+	// Save to session - use individual key for each video
 	session, _ := middleware.VideoSessionStore.Get(c.Request, middleware.VideoSessionName)
-	if session.Values["unlocked_videos"] == nil {
-		session.Values["unlocked_videos"] = make(map[string]bool)
+	session.Values["video_"+slug] = true
+	if err := session.Save(c.Request, c.Writer); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save session"})
+		return
 	}
-	unlockedVideos := session.Values["unlocked_videos"].(map[string]bool)
-	unlockedVideos[slug] = true
-	session.Values["unlocked_videos"] = unlockedVideos
-	session.Save(c.Request, c.Writer)
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -148,10 +146,6 @@ func (h *VideoHandler) isVideoUnlocked(c *gin.Context, slug string) bool {
 		return false
 	}
 
-	unlockedVideos, ok := session.Values["unlocked_videos"].(map[string]bool)
-	if !ok {
-		return false
-	}
-
-	return unlockedVideos[slug]
+	unlocked, ok := session.Values["video_"+slug].(bool)
+	return ok && unlocked
 }
