@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"os"
 
@@ -75,6 +76,37 @@ func setupRouter(
 	adminHandler *handler.AdminHandler,
 ) *gin.Engine {
 	r := gin.Default()
+
+	// Set custom template functions
+	r.SetFuncMap(template.FuncMap{
+		"divf": func(a interface{}, b interface{}) float64 {
+			var af, bf float64
+			switch v := a.(type) {
+			case int:
+				af = float64(v)
+			case int64:
+				af = float64(v)
+			case float64:
+				af = v
+			case float32:
+				af = float64(v)
+			}
+			switch v := b.(type) {
+			case int:
+				bf = float64(v)
+			case int64:
+				bf = float64(v)
+			case float64:
+				bf = v
+			case float32:
+				bf = float64(v)
+			}
+			if bf == 0 {
+				return 0
+			}
+			return af / bf
+		},
+	})
 
 	// Load templates
 	r.LoadHTMLGlob("web/templates/**/*")
