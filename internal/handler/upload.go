@@ -15,14 +15,16 @@ import (
 )
 
 type UploadHandler struct {
-	config       *config.Config
-	videoService *service.VideoService
+	config          *config.Config
+	videoService    *service.VideoService
+	subtitleService *service.SubtitleService
 }
 
-func NewUploadHandler(cfg *config.Config, videoService *service.VideoService) *UploadHandler {
+func NewUploadHandler(cfg *config.Config, videoService *service.VideoService, subtitleService *service.SubtitleService) *UploadHandler {
 	return &UploadHandler{
-		config:       cfg,
-		videoService: videoService,
+		config:          cfg,
+		videoService:    videoService,
+		subtitleService: subtitleService,
 	}
 }
 
@@ -66,6 +68,10 @@ func (h *UploadHandler) UploadVideo(c *gin.Context) {
 	}
 	description := c.PostForm("description")
 
+	// Get password protection settings
+	passwordProtected := c.PostForm("password_protected") == "true"
+	password := c.PostForm("password")
+
 	// Determine upload type
 	uploadType := "web"
 	session, _ := middleware.AdminSessionStore.Get(c.Request, middleware.AdminSessionName)
@@ -90,13 +96,32 @@ func (h *UploadHandler) UploadVideo(c *gin.Context) {
 		title,
 		description,
 		uploadType,
-		false, // For now, don't support password on upload
-		"",
+		passwordProtected,
+		password,
 	)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to process video: %v", err)})
 		return
+	}
+
+	// Handle subtitle file if provided
+	subtitleFile, err := c.FormFile("subtitle")
+	if err == nil && subtitleFile != nil {
+		// Read subtitle file content
+		openedFile, err := subtitleFile.Open()
+		if err == nil {
+			defer openedFile.Close()
+			content := make([]byte, subtitleFile.Size)
+			if _, err := openedFile.Read(content); err == nil {
+				// Save subtitle
+				subtitlePath, err := h.subtitleService.SaveUploadedSubtitle(video.Slug, content)
+				if err == nil {
+					// Update video record with subtitle path
+					database.DB.Model(&video).Update("subtitle_path", subtitlePath)
+				}
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

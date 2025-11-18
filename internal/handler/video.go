@@ -4,17 +4,22 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/adamscao/videoshare/internal/config"
 	"github.com/adamscao/videoshare/internal/middleware"
 	"github.com/adamscao/videoshare/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type VideoHandler struct {
+	config       *config.Config
 	videoService *service.VideoService
 }
 
-func NewVideoHandler(videoService *service.VideoService) *VideoHandler {
-	return &VideoHandler{videoService: videoService}
+func NewVideoHandler(cfg *config.Config, videoService *service.VideoService) *VideoHandler {
+	return &VideoHandler{
+		config:       cfg,
+		videoService: videoService,
+	}
 }
 
 // ShowVideoPage shows video watch page
@@ -38,8 +43,9 @@ func (h *VideoHandler) ShowVideoPage(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "watch.html", gin.H{
-		"video": video,
-		"slug":  video.Slug,
+		"video":          video,
+		"slug":           video.Slug,
+		"subtitleConfig": h.config.Subtitle,
 	})
 }
 

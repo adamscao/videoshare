@@ -182,6 +182,10 @@
             background: #27ae60;
             color: white;
         }
+        .badge-success {
+            background: #3498db;
+            color: white;
+        }
         .actions {
             display: flex;
             gap: 8px;
@@ -315,6 +319,7 @@
                     <tr>
                         <th>视频</th>
                         <th>状态</th>
+                        <th>字幕</th>
                         <th>上传时间</th>
                         <th>大小</th>
                         <th>操作</th>
@@ -332,6 +337,13 @@
                             <span class="badge badge-protected">🔒 需要密码</span>
                             {{ else }}
                             <span class="badge badge-public">🌐 公开</span>
+                            {{ end }}
+                        </td>
+                        <td>
+                            {{ if .SubtitlePath }}
+                            <span class="badge badge-success">📄 有字幕</span>
+                            {{ else }}
+                            <button class="btn btn-secondary btn-small" onclick="generateSubtitle({{ .ID }})">生成字幕</button>
                             {{ end }}
                         </td>
                         <td>{{ .CreatedAt.Format "2006-01-02 15:04" }}</td>
@@ -382,6 +394,11 @@
                 <div class="form-group" id="passwordGroup" style="display:none;">
                     <label>视频密码（留空保持不变）</label>
                     <input type="password" id="editPassword">
+                </div>
+                <div class="form-group">
+                    <label>上传字幕文件（可选）</label>
+                    <input type="file" id="editSubtitleFile" accept=".srt,.vtt">
+                    <p style="color: #999; font-size: 13px; margin-top: 5px;">支持 SRT、VTT 格式</p>
                 </div>
                 <button type="submit" class="btn btn-primary">保存</button>
             </form>
@@ -469,19 +486,38 @@
             };
 
             try {
+                // Update video metadata
                 const response = await fetch(`/api/admin/videos/${id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
                 });
 
-                if (response.ok) {
-                    showNotification('保存成功', 'success');
-                    closeEditModal();
-                    location.reload();
-                } else {
+                if (!response.ok) {
                     showNotification('保存失败', 'error');
+                    return;
                 }
+
+                // Upload subtitle file if selected
+                const subtitleFile = document.getElementById('editSubtitleFile').files[0];
+                if (subtitleFile) {
+                    const formData = new FormData();
+                    formData.append('subtitle', subtitleFile);
+
+                    const subtitleResponse = await fetch(`/api/admin/videos/${id}/upload-subtitle`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!subtitleResponse.ok) {
+                        showNotification('字幕上传失败', 'error');
+                        return;
+                    }
+                }
+
+                showNotification('保存成功', 'success');
+                closeEditModal();
+                location.reload();
             } catch (error) {
                 showNotification('网络错误', 'error');
             }
@@ -509,6 +545,26 @@
                 }
             } catch (error) {
                 showNotification('网络错误', 'error');
+            }
+        }
+
+        // Generate subtitle
+        async function generateSubtitle(videoId) {
+            if (!confirm('生成字幕需要调用 OpenAI API，可能需要几分钟。确定继续吗？')) return;
+
+            try {
+                const response = await fetch(`/api/admin/videos/${videoId}/generate-subtitle`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    showNotification(result.message || '字幕生成已开始，请稍后刷新页面查看', 'success');
+                } else {
+                    showNotification('生成失败: ' + (result.error || '未知错误'), 'error');
+                }
+            } catch (error) {
+                showNotification('网络错误: ' + error.message, 'error');
             }
         }
 

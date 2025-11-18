@@ -66,6 +66,24 @@
         .back-link:hover {
             text-decoration: underline;
         }
+
+        /* Subtitle styles */
+        video::cue {
+            font-size: {{ .subtitleConfig.FontSize }};
+            background: {{ .subtitleConfig.Background }};
+        }
+
+        /* Chinese subtitle style */
+        video::cue(v.chinese) {
+            color: {{ .subtitleConfig.ChineseColor }};
+            font-family: {{ .subtitleConfig.ChineseFont }};
+        }
+
+        /* Original subtitle style */
+        video::cue(v.original) {
+            color: {{ .subtitleConfig.OriginalColor }};
+            font-family: {{ .subtitleConfig.OriginalFont }};
+        }
     </style>
 </head>
 <body>
@@ -73,7 +91,15 @@
         <a href="/upload" class="back-link">← 返回上传页面</a>
 
         <div class="video-container">
-            <video id="video" controls></video>
+            <video id="video" controls>
+                {{ if .video.SubtitlePath }}
+                <track kind="subtitles"
+                       src="/subtitles/{{ .slug }}.vtt"
+                       srclang="zh"
+                       label="中文"
+                       default>
+                {{ end }}
+            </video>
         </div>
 
         <div class="info-container">

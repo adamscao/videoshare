@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/adamscao/videoshare/internal/config"
 	"github.com/adamscao/videoshare/internal/database"
@@ -55,12 +56,12 @@ func main() {
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
-	uploadHandler := handler.NewUploadHandler(cfg, videoService)
-	videoHandler := handler.NewVideoHandler(videoService)
+	uploadHandler := handler.NewUploadHandler(cfg, videoService, subtitleService)
+	videoHandler := handler.NewVideoHandler(cfg, videoService)
 	adminHandler := handler.NewAdminHandler(videoService, importService, subtitleService)
 
 	// Setup router
-	r := setupRouter(authHandler, uploadHandler, videoHandler, adminHandler)
+	r := setupRouter(cfg, authHandler, uploadHandler, videoHandler, adminHandler)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -71,6 +72,7 @@ func main() {
 }
 
 func setupRouter(
+	cfg *config.Config,
 	authHandler *handler.AuthHandler,
 	uploadHandler *handler.UploadHandler,
 	videoHandler *handler.VideoHandler,
@@ -134,6 +136,13 @@ func setupRouter(
 	// HLS streaming routes
 	r.GET("/hls/:slug/playlist.m3u8", videoHandler.ServeHLSPlaylist)
 	r.GET("/hls/:slug/:segment", videoHandler.ServeHLSSegment)
+
+	// Subtitle file serving
+	r.GET("/subtitles/:filename", func(c *gin.Context) {
+		filename := c.Param("filename")
+		subtitlePath := filepath.Join(cfg.Storage.SubtitlesDir, filename)
+		c.File(subtitlePath)
+	})
 
 	// Admin auth routes
 	r.GET("/admin/login", authHandler.ShowLoginPage)
