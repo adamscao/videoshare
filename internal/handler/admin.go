@@ -262,3 +262,9 @@ func (h *AdminHandler) UploadSubtitle(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "subtitle_path": subtitlePath})
 }
+
+// GetImportProgress returns the current import progress
+func (h *AdminHandler) GetImportProgress(c *gin.Context) {
+	progress := h.importService.GetProgress()
+	c.JSON(http.StatusOK, progress)
+}
