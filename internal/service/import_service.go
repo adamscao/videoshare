@@ -37,11 +37,9 @@ type ImportProgress struct {
 	Status    string `json:"status"` // idle/scanning/completed
 }
 
-var supportedExtensions = []string{".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv"}
-
 func NewImportService(cfg *config.Config, videoService *VideoService) *ImportService {
-	// Create failed directory
-	failedDir := filepath.Join(cfg.Storage.ImportDir, "failed")
+	// Create failed directory under data/videos/
+	failedDir := filepath.Join(cfg.Storage.VideosDir, "failed")
 	os.MkdirAll(failedDir, 0755)
 
 	return &ImportService{
@@ -85,16 +83,13 @@ func (s *ImportService) ScanAndImport() (*ImportResult, error) {
 		return nil, fmt.Errorf("failed to read import dir: %w", err)
 	}
 
-	// Filter video files
+	// Scan all files (no extension filtering)
 	var videoFiles []os.DirEntry
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if isSupportedVideoFile(ext) {
-			videoFiles = append(videoFiles, entry)
-		}
+		videoFiles = append(videoFiles, entry)
 	}
 
 	// Initialize progress
@@ -181,8 +176,8 @@ func (s *ImportService) recoverInterruptedImports() {
 			log.Message = "Recovered from interrupted import"
 			database.DB.Save(&log)
 
-			// Move to failed directory
-			failedPath := filepath.Join(s.config.Storage.ImportDir, "failed", log.Filename)
+			// Move to failed directory under data/videos/
+			failedPath := filepath.Join(s.config.Storage.VideosDir, "failed", log.Filename)
 			os.Rename(importPath, failedPath)
 		} else {
 			// File doesn't exist, might have been partially processed
@@ -267,18 +262,9 @@ func (s *ImportService) logImportFailure(importLog *models.ImportLog, importPath
 	importLog.Message = "Import failed"
 	database.DB.Save(importLog)
 
-	// Move to failed directory
-	failedPath := filepath.Join(s.config.Storage.ImportDir, "failed", filepath.Base(importPath))
+	// Move to failed directory under data/videos/
+	failedPath := filepath.Join(s.config.Storage.VideosDir, "failed", filepath.Base(importPath))
 	os.Rename(importPath, failedPath)
-}
-
-func isSupportedVideoFile(ext string) bool {
-	for _, supported := range supportedExtensions {
-		if ext == supported {
-			return true
-		}
-	}
-	return false
 }
 
 func copyFile(src, dst string) error {

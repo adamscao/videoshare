@@ -745,6 +745,39 @@
                 closeEditModal();
             }
         }
+
+        // Check scan status on page load
+        async function checkScanStatusOnLoad() {
+            try {
+                const response = await fetch('/api/admin/import/progress');
+                const progress = await response.json();
+
+                // If scanning, show progress and start polling
+                if (progress.status === 'scanning') {
+                    const importBtn = document.getElementById('importBtn');
+                    const progressDiv = document.getElementById('importProgress');
+
+                    importBtn.disabled = true;
+                    progressDiv.style.display = 'block';
+
+                    updateProgressUI(
+                        progress.total,
+                        progress.processed,
+                        progress.imported,
+                        progress.skipped,
+                        progress.failed,
+                        progress.status
+                    );
+
+                    startProgressPolling();
+                }
+            } catch (error) {
+                console.error('Failed to check scan status:', error);
+            }
+        }
+
+        // Check scan status when page loads
+        window.addEventListener('DOMContentLoaded', checkScanStatusOnLoad);
     </script>
 </body>
 </html>
