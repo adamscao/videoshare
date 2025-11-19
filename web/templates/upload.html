@@ -23,12 +23,17 @@
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
-        .header h1 { font-size: 22px; color: #333; }
-        .header-actions { display: flex; gap: 10px; align-items: center; }
+        .header h1 { font-size: 22px; color: #333; white-space: nowrap; }
+        .header-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-shrink: 0;
+        }
         .github-link {
             color: #333;
             text-decoration: none;
-            padding: 6px 12px;
+            padding: 6px 10px;
             border-radius: 6px;
             transition: background 0.2s;
         }
@@ -43,8 +48,37 @@
             font-size: 13px;
             font-weight: 600;
             transition: all 0.2s;
+            white-space: nowrap;
         }
         .lang-btn.active { background: #667eea; color: white; }
+
+        /* 移动端响应式 */
+        @media (max-width: 600px) {
+            .header {
+                padding: 12px 15px;
+                gap: 10px;
+            }
+            .header h1 {
+                font-size: 16px;
+                flex-shrink: 1;
+                min-width: 0;
+            }
+            .header-actions {
+                gap: 5px;
+            }
+            .github-link {
+                padding: 5px 8px;
+            }
+            .github-link svg {
+                width: 16px;
+                height: 16px;
+            }
+            .lang-btn {
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+        }
+
         .container {
             background: white;
             border-radius: 16px;
