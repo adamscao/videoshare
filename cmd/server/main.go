@@ -164,6 +164,7 @@ func setupRouter(
 		adminAPI.PUT("/videos/:id", adminHandler.UpdateVideo)
 		adminAPI.DELETE("/videos/:id", adminHandler.DeleteVideo)
 		adminAPI.POST("/import", adminHandler.ImportVideos)
+		adminAPI.GET("/import/progress", adminHandler.GetImportProgress)
 		adminAPI.GET("/settings", adminHandler.GetSettings)
 		adminAPI.PUT("/settings", adminHandler.UpdateSettings)
 		adminAPI.POST("/videos/:id/generate-subtitle", adminHandler.GenerateSubtitle)

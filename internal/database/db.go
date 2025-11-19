@@ -33,6 +33,7 @@ func InitDB(dbPath string) error {
 		&models.Video{},
 		&models.Admin{},
 		&models.Setting{},
+		&models.ImportLog{},
 	)
 	if err != nil {
 		return err

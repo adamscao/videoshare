@@ -71,6 +71,10 @@
             padding: 6px 12px;
             font-size: 14px;
         }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
         .container {
             max-width: 1400px;
             margin: 30px auto;
@@ -306,7 +310,20 @@
                 <span>允许访客上传视频</span>
             </div>
             <div style="margin-top: 15px;">
-                <button class="btn btn-success" onclick="importVideos()">🔄 扫描导入服务器视频</button>
+                <button class="btn btn-success" id="importBtn" onclick="importVideos()">🔄 扫描导入服务器视频</button>
+            </div>
+            <div id="importProgress" style="display: none; margin-top: 15px;">
+                <div style="margin-bottom: 10px;">
+                    <strong id="progressText">处理中...</strong>
+                </div>
+                <div style="background: #e0e0e0; border-radius: 10px; height: 25px; overflow: hidden;">
+                    <div id="progressBar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 100%; width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 13px;">
+                        0%
+                    </div>
+                </div>
+                <div style="margin-top: 8px; font-size: 13px; color: #666;" id="progressDetails">
+                    准备中...
+                </div>
             </div>
         </div>
 
@@ -477,8 +494,19 @@
         });
 
         // Import videos
+        let importPollingInterval = null;
+
         async function importVideos() {
             if (!confirm('确定要扫描并导入服务器上的视频吗？这可能需要一些时间。')) return;
+
+            // Disable button and show progress
+            const importBtn = document.getElementById('importBtn');
+            const progressDiv = document.getElementById('importProgress');
+            importBtn.disabled = true;
+            progressDiv.style.display = 'block';
+
+            // Reset progress bar
+            updateProgressUI(0, 0, 0, 0, 0, 'scanning');
 
             try {
                 const response = await fetch('/api/admin/import', {
@@ -487,13 +515,85 @@
                 const result = await response.json();
 
                 if (response.ok) {
-                    alert(`导入完成！\n成功: ${result.imported}\n跳过: ${result.skipped}\n失败: ${result.failed}\n\n${result.messages.join('\n')}`);
-                    location.reload();
+                    // Start polling for progress
+                    startProgressPolling();
                 } else {
+                    // Handle error (e.g., concurrent scan)
                     showNotification('导入失败: ' + result.error, 'error');
+                    importBtn.disabled = false;
+                    progressDiv.style.display = 'none';
                 }
             } catch (error) {
                 showNotification('网络错误', 'error');
+                importBtn.disabled = false;
+                progressDiv.style.display = 'none';
+            }
+        }
+
+        function startProgressPolling() {
+            // Poll every second
+            importPollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/admin/import/progress');
+                    const progress = await response.json();
+
+                    updateProgressUI(
+                        progress.total,
+                        progress.processed,
+                        progress.imported,
+                        progress.skipped,
+                        progress.failed,
+                        progress.status
+                    );
+
+                    // Stop polling when completed
+                    if (progress.status === 'completed') {
+                        clearInterval(importPollingInterval);
+                        importPollingInterval = null;
+
+                        // Re-enable button after a delay
+                        setTimeout(() => {
+                            document.getElementById('importBtn').disabled = false;
+                            showNotification(
+                                `导入完成！成功: ${progress.imported}, 跳过: ${progress.skipped}, 失败: ${progress.failed}`,
+                                'success'
+                            );
+                            // Reload after 2 seconds to show new videos
+                            setTimeout(() => location.reload(), 2000);
+                        }, 1000);
+                    }
+                } catch (error) {
+                    console.error('Progress polling error:', error);
+                }
+            }, 1000);
+        }
+
+        function updateProgressUI(total, processed, imported, skipped, failed, status) {
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressDetails = document.getElementById('progressDetails');
+
+            // Calculate percentage
+            const percentage = total > 0 ? Math.round((processed / total) * 100) : 0;
+
+            // Update progress bar
+            progressBar.style.width = percentage + '%';
+            progressBar.textContent = percentage + '%';
+
+            // Update status text
+            if (status === 'idle') {
+                progressText.textContent = '准备中...';
+            } else if (status === 'scanning') {
+                progressText.textContent = '正在扫描导入...';
+            } else if (status === 'completed') {
+                progressText.textContent = '导入完成！';
+            }
+
+            // Update details
+            if (total > 0) {
+                progressDetails.textContent = `已处理 ${processed}/${total} 个文件 (成功: ${imported}, 跳过: ${skipped}, 失败: ${failed})`;
+            } else {
+                progressDetails.textContent = '准备中...';
             }
         }
 
