@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/adamscao/videoshare/internal/config"
@@ -21,12 +22,8 @@ type SubtitleService struct {
 	config *config.Config
 }
 
-type WhisperResponse struct {
-	Text string `json:"text"`
-}
-
 type TranslationRequest struct {
-	Model    string          `json:"model"`
+	Model    string        `json:"model"`
 	Messages []ChatMessage `json:"messages"`
 }
 
@@ -41,52 +38,66 @@ type TranslationResponse struct {
 	} `json:"choices"`
 }
 
+// SRTSegment represents one timed subtitle entry from Whisper's SRT output.
+type SRTSegment struct {
+	ID    int
+	Start string // "00:00:00,000"
+	End   string // "00:00:02,500"
+	Text  string
+}
+
 func NewSubtitleService(cfg *config.Config) *SubtitleService {
 	return &SubtitleService{config: cfg}
 }
 
-// GenerateSubtitle generates subtitle using OpenAI Whisper API
+// GenerateSubtitle generates subtitle using OpenAI Whisper API with accurate timestamps.
 func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (string, error) {
 	var video models.Video
 	if err := database.DB.First(&video, videoID).Error; err != nil {
 		return "", err
 	}
 
-	// Call Whisper API
-	transcription, err := s.callWhisperAPI(videoPath)
+	// Get SRT with real timestamps from Whisper
+	srtContent, err := s.callWhisperAPI(videoPath)
 	if err != nil {
 		return "", fmt.Errorf("whisper API error: %w", err)
 	}
 
-	// Detect if text is Chinese
-	isChinese := s.containsChinese(transcription)
+	// Parse SRT into timestamped segments
+	segments := s.parseSRT(srtContent)
+	if len(segments) == 0 {
+		return "", fmt.Errorf("no subtitle segments found in Whisper response")
+	}
+
+	// Detect language and build VTT
+	allText := ""
+	for _, seg := range segments {
+		allText += seg.Text
+	}
 
 	var subtitleContent string
-	if isChinese {
-		// Chinese transcription - use as is
-		subtitleContent = s.convertToVTT(transcription, "")
+	if s.containsChinese(allText) {
+		// Already Chinese: convert SRT timestamps directly to VTT
+		subtitleContent = s.buildMonolingualVTT(segments)
 	} else {
-		// Non-Chinese - translate to Chinese and create bilingual subtitle
-		translation, err := s.translateToChinese(transcription)
+		// Translate to Chinese, keep real timestamps for both
+		translations, err := s.translateSegments(segments)
 		if err != nil {
 			return "", fmt.Errorf("translation error: %w", err)
 		}
-		subtitleContent = s.convertToVTT(transcription, translation)
+		subtitleContent = s.buildBilingualVTT(segments, translations)
 	}
 
-	// Save subtitle file
 	subtitlePath := filepath.Join(s.config.Storage.SubtitlesDir, video.Slug+".vtt")
 	if err := os.WriteFile(subtitlePath, []byte(subtitleContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to save subtitle: %w", err)
 	}
 
-	// Update database
 	database.DB.Model(&video).Update("subtitle_path", subtitlePath)
-
 	return subtitlePath, nil
 }
 
-// callWhisperAPI calls OpenAI Whisper API
+// callWhisperAPI calls OpenAI Whisper API and returns SRT-formatted content with timestamps.
 func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
 	file, err := os.Open(audioPath)
 	if err != nil {
@@ -104,7 +115,7 @@ func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
 	io.Copy(part, file)
 
 	writer.WriteField("model", s.config.OpenAI.WhisperModel)
-	writer.WriteField("response_format", "text")
+	writer.WriteField("response_format", "srt") // returns timestamped SRT
 	writer.Close()
 
 	req, err := http.NewRequest("POST", s.config.OpenAI.APIBase+"/audio/transcriptions", body)
@@ -134,19 +145,121 @@ func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
 	return string(responseBody), nil
 }
 
-// translateToChinese translates text to Chinese using OpenAI API
-func (s *SubtitleService) translateToChinese(text string) (string, error) {
+// parseSRT parses SRT content into a slice of segments with timing info.
+func (s *SubtitleService) parseSRT(srt string) []SRTSegment {
+	var segments []SRTSegment
+	// Normalize line endings and split by blank line between entries
+	srt = strings.ReplaceAll(srt, "\r\n", "\n")
+	blocks := strings.Split(strings.TrimSpace(srt), "\n\n")
+
+	for _, block := range blocks {
+		lines := strings.Split(strings.TrimSpace(block), "\n")
+		if len(lines) < 3 {
+			continue
+		}
+
+		id, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+		if err != nil {
+			continue
+		}
+
+		// "00:00:00,000 --> 00:00:02,500"
+		timeParts := strings.Split(lines[1], " --> ")
+		if len(timeParts) != 2 {
+			continue
+		}
+
+		text := strings.Join(lines[2:], "\n")
+
+		segments = append(segments, SRTSegment{
+			ID:    id,
+			Start: strings.TrimSpace(timeParts[0]),
+			End:   strings.TrimSpace(timeParts[1]),
+			Text:  strings.TrimSpace(text),
+		})
+	}
+
+	return segments
+}
+
+// srtTimeToVTT converts SRT timestamp "00:00:00,000" to VTT "00:00:00.000"
+func srtTimeToVTT(ts string) string {
+	return strings.ReplaceAll(ts, ",", ".")
+}
+
+// buildMonolingualVTT builds a single-language VTT from SRT segments with real timestamps.
+func (s *SubtitleService) buildMonolingualVTT(segments []SRTSegment) string {
+	var vtt strings.Builder
+	vtt.WriteString("WEBVTT\n\n")
+	for _, seg := range segments {
+		vtt.WriteString(fmt.Sprintf("%d\n", seg.ID))
+		vtt.WriteString(fmt.Sprintf("%s --> %s\n", srtTimeToVTT(seg.Start), srtTimeToVTT(seg.End)))
+		vtt.WriteString(seg.Text + "\n\n")
+	}
+	return vtt.String()
+}
+
+// buildBilingualVTT builds a bilingual VTT with original + Chinese translation, using real timestamps.
+func (s *SubtitleService) buildBilingualVTT(segments []SRTSegment, translations []string) string {
+	var vtt strings.Builder
+	vtt.WriteString("WEBVTT\n\n")
+	for i, seg := range segments {
+		vtt.WriteString(fmt.Sprintf("%d\n", seg.ID))
+		vtt.WriteString(fmt.Sprintf("%s --> %s\n", srtTimeToVTT(seg.Start), srtTimeToVTT(seg.End)))
+		if i < len(translations) && translations[i] != "" {
+			vtt.WriteString(fmt.Sprintf("<v original>%s</v>\n", seg.Text))
+			vtt.WriteString(fmt.Sprintf("<v chinese>%s</v>\n", translations[i]))
+		} else {
+			vtt.WriteString(seg.Text + "\n")
+		}
+		vtt.WriteString("\n")
+	}
+	return vtt.String()
+}
+
+// translateSegments translates all segments to Chinese in one API call using numbered markers.
+func (s *SubtitleService) translateSegments(segments []SRTSegment) ([]string, error) {
+	var input strings.Builder
+	for _, seg := range segments {
+		input.WriteString(fmt.Sprintf("%d: %s\n", seg.ID, seg.Text))
+	}
+
+	systemPrompt := "You are a professional subtitle translator. Translate the following numbered subtitle lines to Chinese. Keep the exact same numbering format '1: text'. Return only the translated lines, one per line, nothing else."
+	translated, err := s.translateWithPrompt(input.String(), systemPrompt)
+	if err != nil {
+		return nil, err
+	}
+
+	// Map segment ID -> translation
+	idToTranslation := make(map[int]string)
+	for _, line := range strings.Split(translated, "\n") {
+		line = strings.TrimSpace(line)
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 1 {
+			continue
+		}
+		id, err := strconv.Atoi(strings.TrimSpace(line[:colonIdx]))
+		if err != nil {
+			continue
+		}
+		idToTranslation[id] = strings.TrimSpace(line[colonIdx+1:])
+	}
+
+	// Build results in segment order
+	results := make([]string, len(segments))
+	for i, seg := range segments {
+		results[i] = idToTranslation[seg.ID]
+	}
+	return results, nil
+}
+
+// translateWithPrompt calls the chat completion API with a custom system prompt.
+func (s *SubtitleService) translateWithPrompt(text, systemPrompt string) (string, error) {
 	reqBody := TranslationRequest{
 		Model: s.config.OpenAI.TranslationModel,
 		Messages: []ChatMessage{
-			{
-				Role:    "system",
-				Content: "You are a professional translator. Translate the following text to Chinese. Only return the translation, no explanations.",
-			},
-			{
-				Role:    "user",
-				Content: text,
-			},
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: text},
 		},
 	}
 
@@ -182,87 +295,19 @@ func (s *SubtitleService) translateToChinese(text string) (string, error) {
 	return translationResp.Choices[0].Message.Content, nil
 }
 
-// convertToVTT converts text to WebVTT format with optional translation
-func (s *SubtitleService) convertToVTT(original, translation string) string {
-	var vtt strings.Builder
-	vtt.WriteString("WEBVTT\n\n")
-
-	// Split text into sentences (simple split by period, question mark, exclamation)
-	sentences := s.splitIntoSentences(original)
-	translatedSentences := []string{}
-
-	if translation != "" {
-		translatedSentences = s.splitIntoSentences(translation)
-	}
-
-	duration := 5 // seconds per subtitle
-	for i, sentence := range sentences {
-		if sentence == "" {
-			continue
-		}
-
-		start := i * duration
-		end := start + duration
-
-		// Format timestamp
-		startTime := s.formatTimestamp(start)
-		endTime := s.formatTimestamp(end)
-
-		vtt.WriteString(fmt.Sprintf("%d\n", i+1))
-		vtt.WriteString(fmt.Sprintf("%s --> %s\n", startTime, endTime))
-
-		if translation != "" && i < len(translatedSentences) {
-			// Bilingual subtitle
-			vtt.WriteString(fmt.Sprintf("<v original>%s</v>\n", strings.TrimSpace(sentence)))
-			vtt.WriteString(fmt.Sprintf("<v chinese>%s</v>\n", strings.TrimSpace(translatedSentences[i])))
-		} else {
-			// Single language
-			vtt.WriteString(fmt.Sprintf("%s\n", strings.TrimSpace(sentence)))
-		}
-		vtt.WriteString("\n")
-	}
-
-	return vtt.String()
-}
-
-// splitIntoSentences splits text into sentences
-func (s *SubtitleService) splitIntoSentences(text string) []string {
-	// Simple sentence split
-	re := regexp.MustCompile(`[.!?。！？]+`)
-	sentences := re.Split(text, -1)
-
-	var result []string
-	for _, s := range sentences {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
-// formatTimestamp formats seconds to VTT timestamp format
-func (s *SubtitleService) formatTimestamp(seconds int) string {
-	hours := seconds / 3600
-	minutes := (seconds % 3600) / 60
-	secs := seconds % 60
-	return fmt.Sprintf("%02d:%02d:%02d.000", hours, minutes, secs)
-}
-
-// containsChinese checks if text contains Chinese characters
+// containsChinese checks if text contains Chinese characters.
 func (s *SubtitleService) containsChinese(text string) bool {
 	re := regexp.MustCompile(`\p{Han}`)
 	return re.MatchString(text)
 }
 
-// SaveUploadedSubtitle saves an uploaded subtitle file
+// SaveUploadedSubtitle saves an uploaded subtitle file (SRT or VTT).
 func (s *SubtitleService) SaveUploadedSubtitle(videoSlug string, content []byte) (string, error) {
 	subtitlePath := filepath.Join(s.config.Storage.SubtitlesDir, videoSlug+".vtt")
 
-	// Convert SRT to VTT if needed
 	contentStr := string(content)
-	if !strings.HasPrefix(contentStr, "WEBVTT") {
-		contentStr = s.convertSRTtoVTT(contentStr)
+	if !strings.HasPrefix(strings.TrimSpace(contentStr), "WEBVTT") {
+		contentStr = convertSRTtoVTT(contentStr)
 	}
 
 	if err := os.WriteFile(subtitlePath, []byte(contentStr), 0644); err != nil {
@@ -272,19 +317,16 @@ func (s *SubtitleService) SaveUploadedSubtitle(videoSlug string, content []byte)
 	return subtitlePath, nil
 }
 
-// convertSRTtoVTT converts SRT subtitle to VTT format
-func (s *SubtitleService) convertSRTtoVTT(srt string) string {
+// convertSRTtoVTT converts SRT subtitle format to WebVTT.
+func convertSRTtoVTT(srt string) string {
 	lines := strings.Split(srt, "\n")
 	var vtt strings.Builder
 	vtt.WriteString("WEBVTT\n\n")
-
 	for _, line := range lines {
-		// Replace SRT timestamp format with VTT format
 		if strings.Contains(line, " --> ") {
 			line = strings.ReplaceAll(line, ",", ".")
 		}
 		vtt.WriteString(line + "\n")
 	}
-
 	return vtt.String()
 }

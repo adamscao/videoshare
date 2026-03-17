@@ -23,38 +23,25 @@ func NewVideoService(cfg *config.Config, hlsService *HLSService) *VideoService {
 	}
 }
 
-// CreateVideo creates a new video record from uploaded file
+// CreateVideo creates a video record and converts to HLS synchronously.
+// Used by the import service where blocking is acceptable.
 func (s *VideoService) CreateVideo(originalPath, filename, title, description, uploadType string, setPassword bool, password string) (*models.Video, error) {
-	// Generate unique slug
-	slug, err := utils.GenerateSlug(10)
+	slug, err := s.generateUniqueSlug()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate slug: %w", err)
+		return nil, err
 	}
 
-	// Check if slug already exists (rare but possible)
-	var existing models.Video
-	for {
-		result := database.DB.Where("slug = ?", slug).First(&existing)
-		if result.Error != nil {
-			break // Slug is unique
-		}
-		slug, _ = utils.GenerateSlug(10)
-	}
-
-	// Get video info
 	info, err := s.hlsService.GetVideoInfo(originalPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get video info: %w", err)
 	}
 
-	// Convert to HLS
 	hlsDir := filepath.Join(s.config.Storage.HLSDir, slug)
 	hlsPlaylist, err := s.hlsService.ConvertToHLS(originalPath, hlsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to HLS: %w", err)
 	}
 
-	// Create video record
 	video := &models.Video{
 		Slug:                slug,
 		Title:               title,
@@ -66,9 +53,9 @@ func (s *VideoService) CreateVideo(originalPath, filename, title, description, u
 		FileSize:            info.Size,
 		IsPasswordProtected: setPassword,
 		UploadType:          uploadType,
+		Status:              "ready",
 	}
 
-	// Set password if required
 	if setPassword && password != "" {
 		hash, err := utils.HashPassword(password)
 		if err != nil {
@@ -77,14 +64,101 @@ func (s *VideoService) CreateVideo(originalPath, filename, title, description, u
 		video.PasswordHash = hash
 	}
 
-	// Save to database
 	if err := database.DB.Create(video).Error; err != nil {
-		// Clean up HLS files on error
 		os.RemoveAll(hlsDir)
 		return nil, fmt.Errorf("failed to save video: %w", err)
 	}
 
 	return video, nil
+}
+
+// CreateVideoAsync saves a video record immediately with status=pending and
+// starts HLS transcoding in the background. Returns the video with its slug
+// so the caller can redirect the user right away.
+func (s *VideoService) CreateVideoAsync(originalPath, filename, title, description, uploadType string, setPassword bool, password string) (*models.Video, error) {
+	slug, err := s.generateUniqueSlug()
+	if err != nil {
+		return nil, err
+	}
+
+	fileInfo, err := os.Stat(originalPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	video := &models.Video{
+		Slug:                slug,
+		Title:               title,
+		Description:         description,
+		OriginalFilename:    filename,
+		OriginalPath:        originalPath,
+		FileSize:            fileInfo.Size(),
+		IsPasswordProtected: setPassword,
+		UploadType:          uploadType,
+		Status:              "pending",
+	}
+
+	if setPassword && password != "" {
+		hash, err := utils.HashPassword(password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hash password: %w", err)
+		}
+		video.PasswordHash = hash
+	}
+
+	if err := database.DB.Create(video).Error; err != nil {
+		return nil, fmt.Errorf("failed to save video: %w", err)
+	}
+
+	go s.processVideoAsync(video.ID, originalPath, slug)
+
+	return video, nil
+}
+
+// processVideoAsync does HLS conversion in the background and updates the video status.
+func (s *VideoService) processVideoAsync(videoID uint, originalPath, slug string) {
+	database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("status", "processing")
+
+	info, err := s.hlsService.GetVideoInfo(originalPath)
+	if err != nil {
+		database.DB.Model(&models.Video{}).Where("id = ?", videoID).Updates(map[string]interface{}{
+			"status":          "failed",
+			"transcode_error": err.Error(),
+		})
+		return
+	}
+
+	hlsDir := filepath.Join(s.config.Storage.HLSDir, slug)
+	hlsPlaylist, err := s.hlsService.ConvertToHLS(originalPath, hlsDir)
+	if err != nil {
+		os.RemoveAll(hlsDir)
+		database.DB.Model(&models.Video{}).Where("id = ?", videoID).Updates(map[string]interface{}{
+			"status":          "failed",
+			"transcode_error": err.Error(),
+		})
+		return
+	}
+
+	database.DB.Model(&models.Video{}).Where("id = ?", videoID).Updates(map[string]interface{}{
+		"status":   "ready",
+		"hls_path": hlsPlaylist,
+		"duration": int(info.Duration),
+	})
+}
+
+func (s *VideoService) generateUniqueSlug() (string, error) {
+	slug, err := utils.GenerateSlug(10)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate slug: %w", err)
+	}
+	var existing models.Video
+	for {
+		if database.DB.Where("slug = ?", slug).First(&existing).Error != nil {
+			break
+		}
+		slug, _ = utils.GenerateSlug(10)
+	}
+	return slug, nil
 }
 
 // GetVideoBySlug retrieves video by slug

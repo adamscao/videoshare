@@ -84,12 +84,56 @@
             color: {{ .subtitleConfig.OriginalColor }} !important;
             font-family: {{ .subtitleConfig.OriginalFont }};
         }
+
+        /* Processing screen */
+        .processing-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 300px;
+            background: #111;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            padding: 40px;
+            color: #ccc;
+        }
+        .processing-screen .icon { font-size: 56px; margin-bottom: 16px; }
+        .processing-screen h2 { font-size: 20px; margin-bottom: 10px; color: #fff; }
+        .processing-screen p { font-size: 14px; color: #888; }
+        .spinner {
+            width: 48px; height: 48px;
+            border: 4px solid #333;
+            border-top-color: #3ea6ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="container">
         <a href="/upload" class="back-link">← 返回上传页面</a>
 
+        {{ if .videoFailed }}
+        <div class="processing-screen">
+            <div class="icon">❌</div>
+            <h2>视频转码失败</h2>
+            {{ if .video.TranscodeError }}
+            <p>{{ .video.TranscodeError }}</p>
+            {{ else }}
+            <p>处理此视频时遇到错误，请重新上传。</p>
+            {{ end }}
+        </div>
+        {{ else if not .videoReady }}
+        <div class="processing-screen" id="processingScreen">
+            <div class="icon">🎬</div>
+            <h2>视频正在转码中</h2>
+            <p>请稍候，视频将自动播放...</p>
+            <div class="spinner"></div>
+        </div>
+        {{ else }}
         <div class="video-container">
             <video id="video" controls>
                 {{ if .video.SubtitlePath }}
@@ -101,6 +145,7 @@
                 {{ end }}
             </video>
         </div>
+        {{ end }}
 
         <div class="info-container">
             <h1>{{ .video.Title }}</h1>
@@ -120,6 +165,7 @@
     </div>
 
     <script>
+        {{ if .videoReady }}
         const video = document.getElementById('video');
         const videoSrc = '/hls/{{ .slug }}/playlist.m3u8';
 
@@ -138,6 +184,26 @@
         } else {
             alert('您的浏览器不支持 HLS 播放');
         }
+        {{ else if not .videoFailed }}
+        // Poll until transcoding is done, then reload
+        const poller = setInterval(async () => {
+            try {
+                const resp = await fetch('/api/video/{{ .slug }}/status');
+                const data = await resp.json();
+                if (data.status === 'ready') {
+                    clearInterval(poller);
+                    location.reload();
+                } else if (data.status === 'failed') {
+                    clearInterval(poller);
+                    document.getElementById('processingScreen').innerHTML =
+                        '<div class="icon">❌</div><h2>视频转码失败</h2><p>' +
+                        (data.error || '处理视频时出错') + '</p>';
+                }
+            } catch (e) {
+                console.error('Status poll error:', e);
+            }
+        }, 3000);
+        {{ end }}
     </script>
 </body>
 </html>
