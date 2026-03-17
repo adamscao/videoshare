@@ -131,6 +131,7 @@ func setupRouter(
 	// Video watch routes
 	r.GET("/v/:slug", videoHandler.ShowVideoPage)
 	r.GET("/api/video/:slug/info", videoHandler.GetVideoInfo)
+	r.GET("/api/video/:slug/status", videoHandler.GetVideoStatus)
 	r.POST("/api/video/:slug/verify", videoHandler.VerifyVideoPassword)
 
 	// HLS streaming routes

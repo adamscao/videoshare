@@ -18,6 +18,8 @@ type Video struct {
 	IsPasswordProtected bool      `json:"is_password_protected"`
 	PasswordHash        string    `gorm:"size:255" json:"-"` // 不返回给前端
 	UploadType          string    `gorm:"size:20" json:"upload_type"` // web/import/admin
+	Status              string    `gorm:"size:20;default:ready" json:"status"` // pending/processing/ready/failed
+	TranscodeError      string    `gorm:"type:text" json:"transcode_error,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }

@@ -89,8 +89,8 @@ func (h *UploadHandler) UploadVideo(c *gin.Context) {
 		return
 	}
 
-	// Create video record and convert to HLS
-	video, err := h.videoService.CreateVideo(
+	// Save record and start transcoding in background
+	video, err := h.videoService.CreateVideoAsync(
 		savePath,
 		file.Filename,
 		title,

@@ -42,10 +42,38 @@ func (h *VideoHandler) ShowVideoPage(c *gin.Context) {
 		return
 	}
 
+	status := video.Status
+	if status == "" {
+		status = "ready"
+	}
+
 	c.HTML(http.StatusOK, "watch.html", gin.H{
 		"video":          video,
 		"slug":           video.Slug,
 		"subtitleConfig": h.config.Subtitle,
+		"videoReady":     status == "ready",
+		"videoFailed":    status == "failed",
+	})
+}
+
+// GetVideoStatus returns the transcoding status of a video.
+func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
+	slug := c.Param("slug")
+
+	video, err := h.videoService.GetVideoBySlug(slug)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Video not found"})
+		return
+	}
+
+	status := video.Status
+	if status == "" {
+		status = "ready"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": status,
+		"error":  video.TranscodeError,
 	})
 }
 
