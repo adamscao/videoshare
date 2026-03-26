@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -16,6 +18,7 @@ import (
 	"github.com/adamscao/videoshare/internal/config"
 	"github.com/adamscao/videoshare/internal/database"
 	"github.com/adamscao/videoshare/internal/models"
+	"github.com/google/uuid"
 )
 
 type SubtitleService struct {
@@ -51,25 +54,51 @@ func NewSubtitleService(cfg *config.Config) *SubtitleService {
 }
 
 // GenerateSubtitle generates subtitle using OpenAI Whisper API with accurate timestamps.
+// Audio is preprocessed to 16kHz mono 48kbps and split if >20MB.
 func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (string, error) {
 	var video models.Video
 	if err := database.DB.First(&video, videoID).Error; err != nil {
 		return "", err
 	}
 
-	// Get SRT with real timestamps from Whisper
-	srtContent, err := s.callWhisperAPI(videoPath)
+	// Step 1: Extract and convert audio to Whisper-friendly format (16kHz mono 48kbps)
+	audioPath, err := s.prepareAudioForWhisper(videoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to prepare audio: %w", err)
+	}
+	defer os.Remove(audioPath)
+
+	// Step 2: Split into chunks if larger than 20MB
+	audioChunks, err := s.splitAudioIfNeeded(audioPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to split audio: %w", err)
+	}
+	defer func() {
+		for _, chunk := range audioChunks {
+			if chunk != audioPath {
+				os.Remove(chunk)
+			}
+		}
+	}()
+
+	// Step 3: Call Whisper API (handles single or multiple chunks)
+	var srtContent string
+	if len(audioChunks) == 1 {
+		srtContent, err = s.callWhisperAPI(audioChunks[0])
+	} else {
+		srtContent, err = s.callWhisperAPIForChunks(audioChunks)
+	}
 	if err != nil {
 		return "", fmt.Errorf("whisper API error: %w", err)
 	}
 
-	// Parse SRT into timestamped segments
+	// Step 4: Parse SRT into timestamped segments
 	segments := s.parseSRT(srtContent)
 	if len(segments) == 0 {
 		return "", fmt.Errorf("no subtitle segments found in Whisper response")
 	}
 
-	// Detect language and build VTT
+	// Step 5: Detect language and build VTT
 	allText := ""
 	for _, seg := range segments {
 		allText += seg.Text
@@ -77,10 +106,8 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (stri
 
 	var subtitleContent string
 	if s.containsChinese(allText) {
-		// Already Chinese: convert SRT timestamps directly to VTT
 		subtitleContent = s.buildMonolingualVTT(segments)
 	} else {
-		// Translate to Chinese, keep real timestamps for both
 		translations, err := s.translateSegments(segments)
 		if err != nil {
 			return "", fmt.Errorf("translation error: %w", err)
@@ -95,6 +122,174 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (stri
 
 	database.DB.Model(&video).Update("subtitle_path", subtitlePath)
 	return subtitlePath, nil
+}
+
+// prepareAudioForWhisper extracts audio from video and converts to Whisper-friendly format:
+// 16kHz sample rate, mono channel, 48kbps bitrate
+func (s *SubtitleService) prepareAudioForWhisper(videoPath string) (string, error) {
+	tempDir := os.TempDir()
+	audioPath := filepath.Join(tempDir, fmt.Sprintf("whisper_audio_%s.mp3", uuid.New().String()))
+
+	args := []string{
+		"-i", videoPath,
+		"-vn",       // no video
+		"-ac", "1",  // mono
+		"-ar", "16000", // 16kHz
+		"-b:a", "48k",  // 48kbps
+		"-f", "mp3",
+		audioPath,
+	}
+
+	cmd := exec.Command(s.config.FFmpeg.Path, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg audio extraction failed: %w, output: %s", err, string(output))
+	}
+
+	return audioPath, nil
+}
+
+// splitAudioIfNeeded splits audio file into ~20MB chunks to stay within Whisper API limits.
+func (s *SubtitleService) splitAudioIfNeeded(audioPath string) ([]string, error) {
+	fileInfo, err := os.Stat(audioPath)
+	if err != nil {
+		return nil, err
+	}
+
+	const maxSize = 20 * 1024 * 1024 // 20MB
+	if fileInfo.Size() <= maxSize {
+		return []string{audioPath}, nil
+	}
+
+	// Get audio duration
+	durationCmd := exec.Command(s.config.FFmpeg.FFprobePath,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		audioPath,
+	)
+	durationOutput, err := durationCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get audio duration: %w", err)
+	}
+
+	totalDuration, _ := strconv.ParseFloat(strings.TrimSpace(string(durationOutput)), 64)
+	if totalDuration <= 0 {
+		return nil, fmt.Errorf("invalid audio duration: %f", totalDuration)
+	}
+
+	// Calculate chunk duration to get ~20MB chunks
+	chunkCount := int(math.Ceil(float64(fileInfo.Size()) / float64(maxSize)))
+	chunkDuration := totalDuration / float64(chunkCount)
+
+	var chunks []string
+	tempDir := filepath.Dir(audioPath)
+	baseName := strings.TrimSuffix(filepath.Base(audioPath), filepath.Ext(audioPath))
+
+	for i := 0; i < chunkCount; i++ {
+		startTime := float64(i) * chunkDuration
+		chunkPath := filepath.Join(tempDir, fmt.Sprintf("%s_chunk_%d.mp3", baseName, i))
+
+		args := []string{
+			"-i", audioPath,
+			"-ss", fmt.Sprintf("%.2f", startTime),
+			"-t", fmt.Sprintf("%.2f", chunkDuration),
+			"-c", "copy",
+			chunkPath,
+		}
+
+		cmd := exec.Command(s.config.FFmpeg.Path, args...)
+		if err := cmd.Run(); err != nil {
+			// Clean up any created chunks
+			for _, c := range chunks {
+				os.Remove(c)
+			}
+			return nil, fmt.Errorf("failed to split audio chunk %d: %w", i, err)
+		}
+
+		chunks = append(chunks, chunkPath)
+	}
+
+	return chunks, nil
+}
+
+// callWhisperAPIForChunks processes multiple audio chunks through Whisper and merges results.
+func (s *SubtitleService) callWhisperAPIForChunks(audioChunks []string) (string, error) {
+	var allSegments []SRTSegment
+	timeOffset := 0.0
+
+	for i, chunkPath := range audioChunks {
+		srtContent, err := s.callWhisperAPI(chunkPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to transcribe chunk %d: %w", i, err)
+		}
+
+		segments := s.parseSRT(srtContent)
+
+		// Adjust timestamps with accumulated offset
+		for _, seg := range segments {
+			adjustedStart := s.adjustSRTTime(seg.Start, timeOffset)
+			adjustedEnd := s.adjustSRTTime(seg.End, timeOffset)
+
+			allSegments = append(allSegments, SRTSegment{
+				ID:    len(allSegments) + 1,
+				Start: adjustedStart,
+				End:   adjustedEnd,
+				Text:  seg.Text,
+			})
+		}
+
+		// Update offset for next chunk based on last segment's end time
+		if len(segments) > 0 {
+			lastSegmentEnd := s.parseSRTTimeToSeconds(segments[len(segments)-1].End)
+			timeOffset += lastSegmentEnd
+		}
+	}
+
+	return s.segmentsToSRT(allSegments), nil
+}
+
+// adjustSRTTime adds an offset to an SRT timestamp.
+func (s *SubtitleService) adjustSRTTime(srtTime string, offsetSeconds float64) string {
+	seconds := s.parseSRTTimeToSeconds(srtTime)
+	adjusted := seconds + offsetSeconds
+	return s.secondsToSRTTime(adjusted)
+}
+
+// parseSRTTimeToSeconds converts "00:00:05,500" to 5.5 seconds.
+func (s *SubtitleService) parseSRTTimeToSeconds(srtTime string) float64 {
+	parts := strings.Split(srtTime, ":")
+	if len(parts) != 3 {
+		return 0
+	}
+
+	hours, _ := strconv.ParseFloat(parts[0], 64)
+	minutes, _ := strconv.ParseFloat(parts[1], 64)
+	secondsAndMillis := strings.ReplaceAll(parts[2], ",", ".")
+	seconds, _ := strconv.ParseFloat(secondsAndMillis, 64)
+
+	return hours*3600 + minutes*60 + seconds
+}
+
+// secondsToSRTTime converts 5.5 seconds to "00:00:05,500".
+func (s *SubtitleService) secondsToSRTTime(seconds float64) string {
+	hours := int(seconds / 3600)
+	minutes := int((seconds - float64(hours)*3600) / 60)
+	secs := seconds - float64(hours)*3600 - float64(minutes)*60
+	millis := int((secs - float64(int(secs))) * 1000)
+
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", hours, minutes, int(secs), millis)
+}
+
+// segmentsToSRT converts SRTSegment slice back to SRT format string.
+func (s *SubtitleService) segmentsToSRT(segments []SRTSegment) string {
+	var srt strings.Builder
+	for _, seg := range segments {
+		srt.WriteString(fmt.Sprintf("%d\n", seg.ID))
+		srt.WriteString(fmt.Sprintf("%s --> %s\n", seg.Start, seg.End))
+		srt.WriteString(seg.Text + "\n\n")
+	}
+	return srt.String()
 }
 
 // callWhisperAPI calls OpenAI Whisper API and returns SRT-formatted content with timestamps.
