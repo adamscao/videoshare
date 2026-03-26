@@ -5,17 +5,27 @@
 ## 📋 功能特性
 
 ### 核心功能
-- ✅ **视频上传** - 支持 Web 上传和服务器手工上传
-- ✅ **HLS 播放** - 所有视频自动转换为 HLS 格式流畅播放
+- ✅ **视频上传** - 支持 Web 上传和服务器批量导入，上传后立即返回播放地址
+- ✅ **异步转码** - 后台转码不阻塞用户，转码进度实时显示
+- ✅ **智能编码** - 自动检测视频格式，兼容视频直接使用，不兼容格式才转码
+- ✅ **HLS 播放** - 转换为 HLS 格式，确保主流手机和浏览器兼容
+- ✅ **AI 字幕** - Whisper 自动生成字幕，支持中英双语显示
 - ✅ **访问控制** - 支持公开视频和密码保护视频
-- ✅ **后台管理** - 完整的视频管理、编辑、删除功能
+- ✅ **后台管理** - 完整的视频管理、编辑、删除、导入进度显示
 - ✅ **权限管理** - 可设置上传权限（公开/仅管理员）
-- ✅ **批量导入** - 扫描服务器目录批量导入视频
 
 ### 技术特性
 - 🚀 使用 Go 1.21+ 开发，高性能低资源占用
 - 💾 SQLite 数据库，零配置开箱即用
-- 🎬 自动 HLS 转码，支持自适应码率
+- 🎬 智能视频转码：
+  - H.264 8-bit + AAC：直接使用（快速）
+  - High 10 / 10-bit / HDR / >60fps：转码为兼容格式
+  - 异步处理，用户立即获得播放地址
+- 🤖 AI 字幕生成：
+  - Whisper API 精准识别语音
+  - 自动检测语言，非中文自动翻译
+  - 时间轴准确对齐，支持大文件切分
+  - 保留原始 JSON 便于调试
 - 🔐 bcrypt 密码加密，Session 会话管理
 - 📱 响应式设计，支持移动端访问
 
@@ -64,7 +74,7 @@
 
 3. **创建必要的目录**
    ```bash
-   mkdir -p data/videos/{originals,hls} data/import
+   mkdir -p data/videos/{originals,hls,failed} data/import data/subtitles
    ```
 
 4. **初始化管理员账号**
@@ -173,6 +183,7 @@ storage:
   originals_dir: "./data/videos/originals"  # 原始视频
   hls_dir: "./data/videos/hls"          # HLS 转码后文件
   import_dir: "./data/import"           # 手工上传目录
+  subtitles_dir: "./data/subtitles"     # 字幕文件目录
 
 upload:
   max_size: 5368709120    # 最大上传大小 (5GB)
@@ -181,6 +192,9 @@ upload:
     - video/x-matroska
     - video/avi
     - video/quicktime
+  subtitle_types:         # 允许的字幕类型
+    - .srt
+    - .vtt
 
 ffmpeg:
   path: "ffmpeg"          # FFmpeg 路径
@@ -191,9 +205,82 @@ ffmpeg:
 session:
   secret: "change-this-secret-key-in-production"  # Session 密钥（生产环境务必修改！）
   max_age: 86400          # Session 过期时间（秒）
+
+openai:
+  api_key: "sk-..."       # OpenAI API Key（用于字幕生成）
+  api_base: "https://api.openai.com/v1"  # API 地址
+  whisper_model: "whisper-1"  # Whisper 模型
+  translation_model: "gpt-4o-mini"  # 翻译模型
+
+subtitle:
+  chinese_color: "#FFD700"    # 中文字幕颜色
+  chinese_font: "Arial"       # 中文字幕字体
+  original_color: "#FFFFFF"   # 原文字幕颜色
+  original_font: "Arial"      # 原文字幕字体
+  font_size: "18px"           # 字幕字号
+  background: "rgba(0,0,0,0.7)"  # 字幕背景
+  position: "bottom"          # 字幕位置
 ```
 
 **⚠️ 重要**: 生产环境部署前请务必修改 `session.secret` 为随机字符串！
+
+## 🎯 核心特性详解
+
+### 异步转码机制
+
+上传视频后立即返回播放地址，转码在后台异步进行：
+
+1. **用户体验**：
+   - 上传完成即可分享链接
+   - 播放页面显示"转码中"状态
+   - 自动轮询转码进度
+   - 完成后自动刷新播放
+
+2. **转码状态**：
+   - `pending`: 等待转码
+   - `processing`: 正在转码
+   - `ready`: 可以播放
+   - `failed`: 转码失败（显示错误信息）
+
+### 智能编码检测
+
+系统自动检测视频编码，只转码不兼容的格式：
+
+**兼容格式**（不转码，直接使用）：
+- H.264 Baseline/Main/High profile（8-bit）
+- yuv420p 像素格式
+- AAC 音频
+- ≤60 fps
+- 标准色域（非 HDR）
+
+**不兼容格式**（自动转码）：
+- High 10 / High 4:2:2 / High 4:4:4 profile
+- 10-bit 色深（yuv420p10le）
+- HDR（bt2020、HLG、PQ）
+- >60 fps
+- 非 AAC 音频
+
+转码输出：`H.264 High Profile + Level 4.1 + yuv420p + AAC 128k`
+
+### AI 字幕生成
+
+使用 OpenAI Whisper API 自动生成高质量字幕：
+
+**音频预处理**：
+- 自动提取音频
+- 转换为 16kHz 单声道 48Kbps（减小文件，降低成本）
+- >20MB 自动切分处理
+
+**识别和翻译**：
+- Whisper API 返回 JSON 格式（`verbose_json`）
+- 包含精确时间戳（start/end）
+- 中文内容：单语字幕
+- 非中文：自动翻译为中英双语
+- 使用严格 JSON 格式确保 ID 对齐
+
+**输出文件**：
+- `<slug>.vtt`: 最终字幕文件
+- `<slug>_whisper.json`: Whisper 原始 JSON（便于调试）
 
 ## 📖 使用指南
 
@@ -216,6 +303,18 @@ session:
    - 将视频文件放到 `data/import/` 目录
    - 在后台点击"扫描导入服务器视频"
    - 系统自动转码并入库
+   - 实时显示导入进度和状态
+   - 失败的文件自动移动到 `data/videos/failed/`
+
+5. **生成字幕**（需配置 OpenAI API Key）
+   - 在视频列表中点击"生成字幕"
+   - 系统自动：
+     - 提取音频（16kHz 单声道 48Kbps）
+     - 大文件自动切分（>20MB）
+     - 调用 Whisper API 识别
+     - 非中文自动翻译为中英双语
+     - 时间轴精准对齐
+   - 原始 Whisper JSON 保存在 `data/subtitles/<slug>_whisper.json`
 
 ### 访客操作
 
@@ -245,8 +344,12 @@ videoshare/
 │   ├── templates/       # HTML 模板
 │   └── static/          # 静态资源
 ├── data/                # 数据目录
-│   ├── videos/          # 视频文件
-│   ├── import/          # 导入目录
+│   ├── videos/
+│   │   ├── originals/   # 原始视频文件
+│   │   ├── hls/         # HLS 转码文件
+│   │   └── failed/      # 导入失败的文件
+│   ├── import/          # 导入目录（放置待导入视频）
+│   ├── subtitles/       # 字幕文件（.vtt 和 _whisper.json）
 │   └── videoshare.db    # 数据库
 ├── config.yaml          # 配置文件
 ├── DESIGN.md            # 设计文档
@@ -309,16 +412,25 @@ videoshare/
 
 详细的 API 接口说明请参考 [DESIGN.md](DESIGN.md) 文档。
 
-## 🚀 后续扩展
+## 🚀 已实现功能
+
+- ✅ 异步上传转码
+- ✅ 智能格式检测和转码
+- ✅ AI 字幕生成和翻译
+- ✅ 批量导入进度显示
+- ✅ 转码状态实时监控
+
+## 🔮 后续扩展
 
 - [ ] 视频缩略图自动生成
 - [ ] 视频下载功能
 - [ ] 播放统计分析
 - [ ] 视频分类和标签
 - [ ] 全文搜索功能
-- [ ] 批量操作优化
 - [ ] Docker 容器化部署
 - [ ] 多管理员支持
+- [ ] 字幕编辑器
+- [ ] 视频剪辑预览
 
 ## 📄 许可证
 
