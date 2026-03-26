@@ -41,12 +41,33 @@ type TranslationResponse struct {
 	} `json:"choices"`
 }
 
-// SRTSegment represents one timed subtitle entry from Whisper's SRT output.
-type SRTSegment struct {
-	ID    int
-	Start string // "00:00:00,000"
-	End   string // "00:00:02,500"
-	Text  string
+// WhisperSegment represents one timestamped segment from Whisper's verbose_json output.
+type WhisperSegment struct {
+	ID               int     `json:"id"`
+	Seek             int     `json:"seek"`
+	Start            float64 `json:"start"`
+	End              float64 `json:"end"`
+	Text             string  `json:"text"`
+	Tokens           []int   `json:"tokens"`
+	Temperature      float64 `json:"temperature"`
+	AvgLogprob       float64 `json:"avg_logprob"`
+	CompressionRatio float64 `json:"compression_ratio"`
+	NoSpeechProb     float64 `json:"no_speech_prob"`
+}
+
+// WhisperResponse is the complete response from Whisper API in verbose_json format.
+type WhisperResponse struct {
+	Task     string           `json:"task"`
+	Language string           `json:"language"`
+	Duration float64          `json:"duration"`
+	Segments []WhisperSegment `json:"segments"`
+	Text     string           `json:"text"`
+}
+
+// TranslationItem is used for JSON-based translation input/output.
+type TranslationItem struct {
+	ID   int    `json:"id"`
+	Text string `json:"text"`
 }
 
 func NewSubtitleService(cfg *config.Config) *SubtitleService {
@@ -55,6 +76,7 @@ func NewSubtitleService(cfg *config.Config) *SubtitleService {
 
 // GenerateSubtitle generates subtitle using OpenAI Whisper API with accurate timestamps.
 // Audio is preprocessed to 16kHz mono 48kbps and split if >20MB.
+// Uses strict JSON format for both Whisper response and translation to ensure ID alignment.
 func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (string, error) {
 	var video models.Video
 	if err := database.DB.First(&video, videoID).Error; err != nil {
@@ -81,38 +103,35 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (stri
 		}
 	}()
 
-	// Step 3: Call Whisper API (handles single or multiple chunks)
-	var srtContent string
+	// Step 3: Call Whisper API and get JSON response
+	var whisperResp *WhisperResponse
 	if len(audioChunks) == 1 {
-		srtContent, err = s.callWhisperAPI(audioChunks[0])
+		whisperResp, err = s.callWhisperAPI(audioChunks[0])
 	} else {
-		srtContent, err = s.callWhisperAPIForChunks(audioChunks)
+		whisperResp, err = s.callWhisperAPIForChunks(audioChunks)
 	}
 	if err != nil {
 		return "", fmt.Errorf("whisper API error: %w", err)
 	}
 
-	// Step 4: Parse SRT into timestamped segments
-	segments := s.parseSRT(srtContent)
-	if len(segments) == 0 {
-		return "", fmt.Errorf("no subtitle segments found in Whisper response")
+	// Step 4: Save original Whisper JSON for debugging
+	if err := s.saveWhisperJSON(video.Slug, whisperResp); err != nil {
+		// Non-fatal, just log
+		fmt.Printf("Warning: failed to save Whisper JSON: %v\n", err)
 	}
 
 	// Step 5: Detect language and build VTT
-	allText := ""
-	for _, seg := range segments {
-		allText += seg.Text
-	}
+	isChinese := s.containsChinese(whisperResp.Text)
 
 	var subtitleContent string
-	if s.containsChinese(allText) {
-		subtitleContent = s.buildMonolingualVTT(segments)
+	if isChinese {
+		subtitleContent = s.buildMonolingualVTTFromJSON(whisperResp.Segments)
 	} else {
-		translations, err := s.translateSegments(segments)
+		translations, err := s.translateSegmentsJSON(whisperResp.Segments)
 		if err != nil {
 			return "", fmt.Errorf("translation error: %w", err)
 		}
-		subtitleContent = s.buildBilingualVTT(segments, translations)
+		subtitleContent = s.buildBilingualVTTFromJSON(whisperResp.Segments, translations)
 	}
 
 	subtitlePath := filepath.Join(s.config.Storage.SubtitlesDir, video.Slug+".vtt")
@@ -132,8 +151,8 @@ func (s *SubtitleService) prepareAudioForWhisper(videoPath string) (string, erro
 
 	args := []string{
 		"-i", videoPath,
-		"-vn",       // no video
-		"-ac", "1",  // mono
+		"-vn",          // no video
+		"-ac", "1",     // mono
 		"-ar", "16000", // 16kHz
 		"-b:a", "48k",  // 48kbps
 		"-f", "mp3",
@@ -200,7 +219,6 @@ func (s *SubtitleService) splitAudioIfNeeded(audioPath string) ([]string, error)
 
 		cmd := exec.Command(s.config.FFmpeg.Path, args...)
 		if err := cmd.Run(); err != nil {
-			// Clean up any created chunks
 			for _, c := range chunks {
 				os.Remove(c)
 			}
@@ -214,89 +232,54 @@ func (s *SubtitleService) splitAudioIfNeeded(audioPath string) ([]string, error)
 }
 
 // callWhisperAPIForChunks processes multiple audio chunks through Whisper and merges results.
-func (s *SubtitleService) callWhisperAPIForChunks(audioChunks []string) (string, error) {
-	var allSegments []SRTSegment
+func (s *SubtitleService) callWhisperAPIForChunks(audioChunks []string) (*WhisperResponse, error) {
+	var allSegments []WhisperSegment
 	timeOffset := 0.0
+	nextID := 0
 
 	for i, chunkPath := range audioChunks {
-		srtContent, err := s.callWhisperAPI(chunkPath)
+		whisperResp, err := s.callWhisperAPI(chunkPath)
 		if err != nil {
-			return "", fmt.Errorf("failed to transcribe chunk %d: %w", i, err)
+			return nil, fmt.Errorf("failed to transcribe chunk %d: %w", i, err)
 		}
 
-		segments := s.parseSRT(srtContent)
-
-		// Adjust timestamps with accumulated offset
-		for _, seg := range segments {
-			adjustedStart := s.adjustSRTTime(seg.Start, timeOffset)
-			adjustedEnd := s.adjustSRTTime(seg.End, timeOffset)
-
-			allSegments = append(allSegments, SRTSegment{
-				ID:    len(allSegments) + 1,
-				Start: adjustedStart,
-				End:   adjustedEnd,
-				Text:  seg.Text,
-			})
+		// Adjust timestamps and IDs
+		for _, seg := range whisperResp.Segments {
+			adjustedSeg := WhisperSegment{
+				ID:               nextID,
+				Start:            seg.Start + timeOffset,
+				End:              seg.End + timeOffset,
+				Text:             seg.Text,
+				Tokens:           seg.Tokens,
+				Temperature:      seg.Temperature,
+				AvgLogprob:       seg.AvgLogprob,
+				CompressionRatio: seg.CompressionRatio,
+				NoSpeechProb:     seg.NoSpeechProb,
+			}
+			allSegments = append(allSegments, adjustedSeg)
+			nextID++
 		}
 
-		// Update offset for next chunk based on last segment's end time
-		if len(segments) > 0 {
-			lastSegmentEnd := s.parseSRTTimeToSeconds(segments[len(segments)-1].End)
-			timeOffset += lastSegmentEnd
+		// Update offset for next chunk
+		if len(whisperResp.Segments) > 0 {
+			lastSeg := whisperResp.Segments[len(whisperResp.Segments)-1]
+			timeOffset += lastSeg.End
 		}
 	}
 
-	return s.segmentsToSRT(allSegments), nil
+	return &WhisperResponse{
+		Task:     "transcribe",
+		Language: "auto",
+		Duration: timeOffset,
+		Segments: allSegments,
+	}, nil
 }
 
-// adjustSRTTime adds an offset to an SRT timestamp.
-func (s *SubtitleService) adjustSRTTime(srtTime string, offsetSeconds float64) string {
-	seconds := s.parseSRTTimeToSeconds(srtTime)
-	adjusted := seconds + offsetSeconds
-	return s.secondsToSRTTime(adjusted)
-}
-
-// parseSRTTimeToSeconds converts "00:00:05,500" to 5.5 seconds.
-func (s *SubtitleService) parseSRTTimeToSeconds(srtTime string) float64 {
-	parts := strings.Split(srtTime, ":")
-	if len(parts) != 3 {
-		return 0
-	}
-
-	hours, _ := strconv.ParseFloat(parts[0], 64)
-	minutes, _ := strconv.ParseFloat(parts[1], 64)
-	secondsAndMillis := strings.ReplaceAll(parts[2], ",", ".")
-	seconds, _ := strconv.ParseFloat(secondsAndMillis, 64)
-
-	return hours*3600 + minutes*60 + seconds
-}
-
-// secondsToSRTTime converts 5.5 seconds to "00:00:05,500".
-func (s *SubtitleService) secondsToSRTTime(seconds float64) string {
-	hours := int(seconds / 3600)
-	minutes := int((seconds - float64(hours)*3600) / 60)
-	secs := seconds - float64(hours)*3600 - float64(minutes)*60
-	millis := int((secs - float64(int(secs))) * 1000)
-
-	return fmt.Sprintf("%02d:%02d:%02d,%03d", hours, minutes, int(secs), millis)
-}
-
-// segmentsToSRT converts SRTSegment slice back to SRT format string.
-func (s *SubtitleService) segmentsToSRT(segments []SRTSegment) string {
-	var srt strings.Builder
-	for _, seg := range segments {
-		srt.WriteString(fmt.Sprintf("%d\n", seg.ID))
-		srt.WriteString(fmt.Sprintf("%s --> %s\n", seg.Start, seg.End))
-		srt.WriteString(seg.Text + "\n\n")
-	}
-	return srt.String()
-}
-
-// callWhisperAPI calls OpenAI Whisper API and returns SRT-formatted content with timestamps.
-func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
+// callWhisperAPI calls OpenAI Whisper API and returns verbose JSON with timestamps.
+func (s *SubtitleService) callWhisperAPI(audioPath string) (*WhisperResponse, error) {
 	file, err := os.Open(audioPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer file.Close()
 
@@ -305,17 +288,17 @@ func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
 
 	part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	io.Copy(part, file)
 
 	writer.WriteField("model", s.config.OpenAI.WhisperModel)
-	writer.WriteField("response_format", "srt") // returns timestamped SRT
+	writer.WriteField("response_format", "verbose_json") // Get detailed JSON with timestamps
 	writer.Close()
 
 	req, err := http.NewRequest("POST", s.config.OpenAI.APIBase+"/audio/transcriptions", body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -324,128 +307,155 @@ func (s *SubtitleService) callWhisperAPI(audioPath string) (string, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("whisper API returned status %d: %s", resp.StatusCode, string(responseBody))
+		return nil, fmt.Errorf("whisper API returned status %d: %s", resp.StatusCode, string(responseBody))
 	}
 
-	return string(responseBody), nil
+	var whisperResp WhisperResponse
+	if err := json.Unmarshal(responseBody, &whisperResp); err != nil {
+		return nil, fmt.Errorf("failed to parse Whisper JSON: %w", err)
+	}
+
+	return &whisperResp, nil
 }
 
-// parseSRT parses SRT content into a slice of segments with timing info.
-func (s *SubtitleService) parseSRT(srt string) []SRTSegment {
-	var segments []SRTSegment
-	// Normalize line endings and split by blank line between entries
-	srt = strings.ReplaceAll(srt, "\r\n", "\n")
-	blocks := strings.Split(strings.TrimSpace(srt), "\n\n")
+// saveWhisperJSON saves the original Whisper response for debugging.
+func (s *SubtitleService) saveWhisperJSON(slug string, whisperResp *WhisperResponse) error {
+	jsonPath := filepath.Join(s.config.Storage.SubtitlesDir, slug+"_whisper.json")
+	data, err := json.MarshalIndent(whisperResp, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(jsonPath, data, 0644)
+}
 
-	for _, block := range blocks {
-		lines := strings.Split(strings.TrimSpace(block), "\n")
-		if len(lines) < 3 {
-			continue
-		}
-
-		id, err := strconv.Atoi(strings.TrimSpace(lines[0]))
-		if err != nil {
-			continue
-		}
-
-		// "00:00:00,000 --> 00:00:02,500"
-		timeParts := strings.Split(lines[1], " --> ")
-		if len(timeParts) != 2 {
-			continue
-		}
-
-		text := strings.Join(lines[2:], "\n")
-
-		segments = append(segments, SRTSegment{
-			ID:    id,
-			Start: strings.TrimSpace(timeParts[0]),
-			End:   strings.TrimSpace(timeParts[1]),
-			Text:  strings.TrimSpace(text),
+// translateSegmentsJSON translates segments using strict JSON format to ensure ID alignment.
+func (s *SubtitleService) translateSegmentsJSON(segments []WhisperSegment) ([]TranslationItem, error) {
+	// Build input JSON array
+	var input []TranslationItem
+	for _, seg := range segments {
+		input = append(input, TranslationItem{
+			ID:   seg.ID,
+			Text: strings.TrimSpace(seg.Text),
 		})
 	}
 
-	return segments
-}
-
-// srtTimeToVTT converts SRT timestamp "00:00:00,000" to VTT "00:00:00.000"
-func srtTimeToVTT(ts string) string {
-	return strings.ReplaceAll(ts, ",", ".")
-}
-
-// buildMonolingualVTT builds a single-language VTT from SRT segments with real timestamps.
-func (s *SubtitleService) buildMonolingualVTT(segments []SRTSegment) string {
-	var vtt strings.Builder
-	vtt.WriteString("WEBVTT\n\n")
-	for _, seg := range segments {
-		vtt.WriteString(fmt.Sprintf("%d\n", seg.ID))
-		vtt.WriteString(fmt.Sprintf("%s --> %s\n", srtTimeToVTT(seg.Start), srtTimeToVTT(seg.End)))
-		vtt.WriteString(seg.Text + "\n\n")
-	}
-	return vtt.String()
-}
-
-// buildBilingualVTT builds a bilingual VTT with original + Chinese translation, using real timestamps.
-func (s *SubtitleService) buildBilingualVTT(segments []SRTSegment, translations []string) string {
-	var vtt strings.Builder
-	vtt.WriteString("WEBVTT\n\n")
-	for i, seg := range segments {
-		vtt.WriteString(fmt.Sprintf("%d\n", seg.ID))
-		vtt.WriteString(fmt.Sprintf("%s --> %s\n", srtTimeToVTT(seg.Start), srtTimeToVTT(seg.End)))
-		if i < len(translations) && translations[i] != "" {
-			vtt.WriteString(fmt.Sprintf("<v original>%s</v>\n", seg.Text))
-			vtt.WriteString(fmt.Sprintf("<v chinese>%s</v>\n", translations[i]))
-		} else {
-			vtt.WriteString(seg.Text + "\n")
-		}
-		vtt.WriteString("\n")
-	}
-	return vtt.String()
-}
-
-// translateSegments translates all segments to Chinese in one API call using numbered markers.
-func (s *SubtitleService) translateSegments(segments []SRTSegment) ([]string, error) {
-	var input strings.Builder
-	for _, seg := range segments {
-		input.WriteString(fmt.Sprintf("%d: %s\n", seg.ID, seg.Text))
-	}
-
-	systemPrompt := "You are a professional subtitle translator. Translate the following numbered subtitle lines to Chinese. Keep the exact same numbering format '1: text'. Return only the translated lines, one per line, nothing else."
-	translated, err := s.translateWithPrompt(input.String(), systemPrompt)
+	inputJSON, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
 
-	// Map segment ID -> translation
-	idToTranslation := make(map[int]string)
-	for _, line := range strings.Split(translated, "\n") {
-		line = strings.TrimSpace(line)
-		colonIdx := strings.Index(line, ":")
-		if colonIdx < 1 {
-			continue
-		}
-		id, err := strconv.Atoi(strings.TrimSpace(line[:colonIdx]))
-		if err != nil {
-			continue
-		}
-		idToTranslation[id] = strings.TrimSpace(line[colonIdx+1:])
+	systemPrompt := `You are a professional subtitle translator. Translate the following JSON array of subtitles to Chinese.
+
+Input format: [{"id": 0, "text": "original text"}, {"id": 1, "text": "another text"}, ...]
+Output format: [{"id": 0, "text": "翻译文本"}, {"id": 1, "text": "另一个文本"}, ...]
+
+CRITICAL RULES:
+1. Keep the EXACT same IDs from input
+2. Translate ALL entries - do not skip any
+3. Return ONLY the JSON array, no markdown, no explanations
+4. Ensure valid JSON syntax`
+
+	translatedText, err := s.translateWithPrompt(string(inputJSON), systemPrompt)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build results in segment order
-	results := make([]string, len(segments))
-	for i, seg := range segments {
-		results[i] = idToTranslation[seg.ID]
+	// Clean up markdown code blocks if LLM added them
+	translatedText = strings.TrimSpace(translatedText)
+	translatedText = strings.TrimPrefix(translatedText, "```json")
+	translatedText = strings.TrimPrefix(translatedText, "```")
+	translatedText = strings.TrimSuffix(translatedText, "```")
+	translatedText = strings.TrimSpace(translatedText)
+
+	// Parse translation JSON
+	var output []TranslationItem
+	if err := json.Unmarshal([]byte(translatedText), &output); err != nil {
+		return nil, fmt.Errorf("failed to parse translation JSON: %w\nResponse: %s", err, translatedText)
 	}
-	return results, nil
+
+	// Build ID map for quick lookup
+	idMap := make(map[int]string)
+	for _, t := range output {
+		idMap[t.ID] = t.Text
+	}
+
+	// Build final result, ensuring all IDs are present
+	result := make([]TranslationItem, len(segments))
+	for i, seg := range segments {
+		if translation, ok := idMap[seg.ID]; ok && translation != "" {
+			result[i] = TranslationItem{ID: seg.ID, Text: translation}
+		} else {
+			// Fallback to original text if translation missing
+			result[i] = TranslationItem{ID: seg.ID, Text: seg.Text}
+		}
+	}
+
+	return result, nil
+}
+
+// buildMonolingualVTTFromJSON builds a single-language VTT from Whisper JSON segments.
+func (s *SubtitleService) buildMonolingualVTTFromJSON(segments []WhisperSegment) string {
+	var vtt strings.Builder
+	vtt.WriteString("WEBVTT\n\n")
+
+	for _, seg := range segments {
+		vtt.WriteString(fmt.Sprintf("%d\n", seg.ID+1))
+		vtt.WriteString(fmt.Sprintf("%s --> %s\n",
+			formatVTTTime(seg.Start),
+			formatVTTTime(seg.End)))
+		vtt.WriteString(strings.TrimSpace(seg.Text) + "\n\n")
+	}
+
+	return vtt.String()
+}
+
+// buildBilingualVTTFromJSON builds a bilingual VTT with original + Chinese translation.
+func (s *SubtitleService) buildBilingualVTTFromJSON(segments []WhisperSegment, translations []TranslationItem) string {
+	var vtt strings.Builder
+	vtt.WriteString("WEBVTT\n\n")
+
+	// Build translation map
+	transMap := make(map[int]string)
+	for _, t := range translations {
+		transMap[t.ID] = t.Text
+	}
+
+	for _, seg := range segments {
+		vtt.WriteString(fmt.Sprintf("%d\n", seg.ID+1))
+		vtt.WriteString(fmt.Sprintf("%s --> %s\n",
+			formatVTTTime(seg.Start),
+			formatVTTTime(seg.End)))
+
+		if translation, ok := transMap[seg.ID]; ok && translation != "" {
+			vtt.WriteString(fmt.Sprintf("<v original>%s</v>\n", strings.TrimSpace(seg.Text)))
+			vtt.WriteString(fmt.Sprintf("<v chinese>%s</v>\n", translation))
+		} else {
+			vtt.WriteString(strings.TrimSpace(seg.Text) + "\n")
+		}
+		vtt.WriteString("\n")
+	}
+
+	return vtt.String()
+}
+
+// formatVTTTime converts seconds to VTT timestamp format "HH:MM:SS.mmm"
+func formatVTTTime(seconds float64) string {
+	hours := int(seconds / 3600)
+	minutes := int((seconds - float64(hours)*3600) / 60)
+	secs := seconds - float64(hours)*3600 - float64(minutes)*60
+	millis := int((secs - float64(int(secs))) * 1000)
+
+	return fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, int(secs), millis)
 }
 
 // translateWithPrompt calls the chat completion API with a custom system prompt.
