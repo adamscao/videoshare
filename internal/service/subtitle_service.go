@@ -400,14 +400,12 @@ func preMergeSegments(segments []WhisperSegment) ([]WhisperSegment, [][]int) {
 	var groupIDs []int
 	var groupText strings.Builder
 	var groupStart float64
-	var groupFirstID int
 
 	for i, seg := range segments {
 		text := strings.TrimSpace(seg.Text)
 
 		if len(groupIDs) == 0 {
 			groupStart = seg.Start
-			groupFirstID = seg.ID
 		}
 		groupIDs = append(groupIDs, seg.ID)
 		if groupText.Len() > 0 {
@@ -418,7 +416,7 @@ func preMergeSegments(segments []WhisperSegment) ([]WhisperSegment, [][]int) {
 		// Flush on sentence-ending punctuation or at the last segment
 		if endsWithSentencePunctuation(text) || i == len(segments)-1 {
 			merged = append(merged, WhisperSegment{
-				ID:    groupFirstID,
+				ID:    len(merged), // sequential ID so LLM always sees 0,1,2,...
 				Start: groupStart,
 				End:   seg.End,
 				Text:  groupText.String(),
@@ -443,22 +441,23 @@ func endsWithSentencePunctuation(text string) bool {
 
 // expandByGroups maps merged translations back to original segment IDs,
 // duplicating each translation across all segments that were merged into it.
+//
+// Uses positional index (not ID) to match translations to groups, because
+// the LLM may renumber IDs sequentially regardless of what IDs it received.
 func expandByGroups(originalSegments []WhisperSegment, groups [][]int, mergedTranslations []TranslationItem) []TranslationItem {
-	// Map merged-group first-ID -> translation text
-	transMap := make(map[int]string, len(mergedTranslations))
-	for _, t := range mergedTranslations {
-		transMap[t.ID] = t.Text
+	// Index translation text by position: texts[i] = translation for group i
+	texts := make([]string, len(groups))
+	for i, t := range mergedTranslations {
+		if i < len(texts) {
+			texts[i] = t.Text
+		}
 	}
 
-	// Map each original segment ID -> first ID of its group
-	segToGroupFirst := make(map[int]int, len(originalSegments))
-	for _, group := range groups {
-		if len(group) == 0 {
-			continue
-		}
-		first := group[0]
+	// Map each original segment ID -> group index
+	segToGroupIdx := make(map[int]int, len(originalSegments))
+	for gi, group := range groups {
 		for _, id := range group {
-			segToGroupFirst[id] = first
+			segToGroupIdx[id] = gi
 		}
 	}
 
@@ -466,7 +465,7 @@ func expandByGroups(originalSegments []WhisperSegment, groups [][]int, mergedTra
 	for i, seg := range originalSegments {
 		result[i] = TranslationItem{
 			ID:   seg.ID,
-			Text: transMap[segToGroupFirst[seg.ID]],
+			Text: texts[segToGroupIdx[seg.ID]],
 		}
 	}
 	return result
