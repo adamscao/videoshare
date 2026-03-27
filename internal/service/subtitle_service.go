@@ -83,41 +83,52 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) (stri
 		return "", err
 	}
 
-	// Step 1: Extract and convert audio to Whisper-friendly format (16kHz mono 48kbps)
-	audioPath, err := s.prepareAudioForWhisper(videoPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to prepare audio: %w", err)
-	}
-	defer os.Remove(audioPath)
-
-	// Step 2: Split into chunks if larger than 20MB
-	audioChunks, err := s.splitAudioIfNeeded(audioPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to split audio: %w", err)
-	}
-	defer func() {
-		for _, chunk := range audioChunks {
-			if chunk != audioPath {
-				os.Remove(chunk)
-			}
-		}
-	}()
-
-	// Step 3: Call Whisper API and get JSON response
+	// If a cached Whisper JSON exists, reuse it to avoid an expensive API call.
 	var whisperResp *WhisperResponse
-	if len(audioChunks) == 1 {
-		whisperResp, err = s.callWhisperAPI(audioChunks[0])
-	} else {
-		whisperResp, err = s.callWhisperAPIForChunks(audioChunks)
-	}
-	if err != nil {
-		return "", fmt.Errorf("whisper API error: %w", err)
+	jsonPath := filepath.Join(s.config.Storage.SubtitlesDir, video.Slug+"_whisper.json")
+	if data, err := os.ReadFile(jsonPath); err == nil {
+		var cached WhisperResponse
+		if json.Unmarshal(data, &cached) == nil {
+			fmt.Printf("Reusing cached Whisper JSON for %s\n", video.Slug)
+			whisperResp = &cached
+		}
 	}
 
-	// Step 4: Save original Whisper JSON for debugging
-	if err := s.saveWhisperJSON(video.Slug, whisperResp); err != nil {
-		// Non-fatal, just log
-		fmt.Printf("Warning: failed to save Whisper JSON: %v\n", err)
+	if whisperResp == nil {
+		// Step 1: Extract and convert audio to Whisper-friendly format (16kHz mono 48kbps)
+		audioPath, err := s.prepareAudioForWhisper(videoPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to prepare audio: %w", err)
+		}
+		defer os.Remove(audioPath)
+
+		// Step 2: Split into chunks if larger than 20MB
+		audioChunks, err := s.splitAudioIfNeeded(audioPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to split audio: %w", err)
+		}
+		defer func() {
+			for _, chunk := range audioChunks {
+				if chunk != audioPath {
+					os.Remove(chunk)
+				}
+			}
+		}()
+
+		// Step 3: Call Whisper API and get JSON response
+		if len(audioChunks) == 1 {
+			whisperResp, err = s.callWhisperAPI(audioChunks[0])
+		} else {
+			whisperResp, err = s.callWhisperAPIForChunks(audioChunks)
+		}
+		if err != nil {
+			return "", fmt.Errorf("whisper API error: %w", err)
+		}
+
+		// Step 4: Save original Whisper JSON for future reuse
+		if err := s.saveWhisperJSON(video.Slug, whisperResp); err != nil {
+			fmt.Printf("Warning: failed to save Whisper JSON: %v\n", err)
+		}
 	}
 
 	// Step 5: Detect language and build VTT
