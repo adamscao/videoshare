@@ -339,28 +339,126 @@ func (s *SubtitleService) saveWhisperJSON(slug string, whisperResp *WhisperRespo
 }
 
 // translateSegmentsJSON translates segments using strict JSON format with fallback.
-// First tries batch translation, then expands merged translations by duplicating them,
-// and finally falls back to one-by-one if expansion fails.
+//
+// The core alignment problem: Whisper splits sentences across multiple segments (e.g.
+// segment 10 = "The Pentagon... models" and segment 11 = "for all lawful uses.").
+// The LLM merges them into one Chinese sentence, but to keep the output count correct it
+// shifts all subsequent translations forward by one — validateTranslationAlignment passes
+// (same count, same IDs) but every translation after the merge point is wrong.
+//
+// Fix: pre-merge incomplete-sentence segments into whole sentences before translation.
+// The LLM receives complete sentences and has no reason to merge. The result is then
+// expanded back to the original segment count by duplicating each translation across all
+// segments that were merged into it.
 func (s *SubtitleService) translateSegmentsJSON(segments []WhisperSegment) ([]TranslationItem, error) {
-	// Try batch translation first (faster and often produces better merged translations)
-	result, err := s.translateSegmentsBatch(segments)
-	if err == nil && s.validateTranslationAlignment(segments, result) {
-		return result, nil
+	// Pre-merge fragments into complete sentences
+	mergedSegments, groups := preMergeSegments(segments)
+
+	result, err := s.translateSegmentsBatch(mergedSegments)
+	if err == nil && s.validateTranslationAlignment(mergedSegments, result) {
+		return expandByGroups(segments, groups, result), nil
 	}
 
-	// If we got fewer translations (LLM merged segments), try to expand them
-	if err == nil && len(result) < len(segments) && len(result) > 0 {
-		expanded, expandErr := s.expandMergedTranslations(segments, result)
+	// LLM still merged some items despite clean input; try expanding the partial result
+	if err == nil && len(result) < len(mergedSegments) && len(result) > 0 {
+		expanded, expandErr := s.expandMergedTranslations(mergedSegments, result)
 		if expandErr == nil {
-			fmt.Printf("Successfully expanded %d merged translations to %d segments\n", len(result), len(expanded))
-			return expanded, nil
+			fmt.Printf("Expanded %d merged translations to %d merged segments\n", len(result), len(mergedSegments))
+			return expandByGroups(segments, groups, expanded), nil
 		}
 		fmt.Printf("Failed to expand merged translations: %v\n", expandErr)
 	}
 
-	// Fallback to one-by-one translation for guaranteed alignment
-	fmt.Printf("Batch translation misaligned (%d segments -> %d translations), using one-by-one method...\n", len(segments), len(result))
+	// Final fallback: one-by-one on original segments
+	fmt.Printf("Batch translation misaligned (%d merged segments -> %d translations), using one-by-one...\n", len(mergedSegments), len(result))
 	return s.translateSegmentsOneByOne(segments)
+}
+
+// preMergeSegments groups consecutive segments into complete sentences.
+// Sentence boundaries are detected by terminal punctuation (. ? !).
+// Returns merged segments (each using the first original segment's ID and start time)
+// and groups[i] = slice of original segment IDs that were merged into merged segment i.
+func preMergeSegments(segments []WhisperSegment) ([]WhisperSegment, [][]int) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+
+	var merged []WhisperSegment
+	var groups [][]int
+
+	var groupIDs []int
+	var groupText strings.Builder
+	var groupStart float64
+	var groupFirstID int
+
+	for i, seg := range segments {
+		text := strings.TrimSpace(seg.Text)
+
+		if len(groupIDs) == 0 {
+			groupStart = seg.Start
+			groupFirstID = seg.ID
+		}
+		groupIDs = append(groupIDs, seg.ID)
+		if groupText.Len() > 0 {
+			groupText.WriteByte(' ')
+		}
+		groupText.WriteString(text)
+
+		// Flush on sentence-ending punctuation or at the last segment
+		if endsWithSentencePunctuation(text) || i == len(segments)-1 {
+			merged = append(merged, WhisperSegment{
+				ID:    groupFirstID,
+				Start: groupStart,
+				End:   seg.End,
+				Text:  groupText.String(),
+			})
+			groups = append(groups, groupIDs)
+			groupIDs = nil
+			groupText.Reset()
+		}
+	}
+
+	return merged, groups
+}
+
+// endsWithSentencePunctuation reports whether text ends with . ? or !
+func endsWithSentencePunctuation(text string) bool {
+	if len(text) == 0 {
+		return false
+	}
+	last := text[len(text)-1]
+	return last == '.' || last == '?' || last == '!'
+}
+
+// expandByGroups maps merged translations back to original segment IDs,
+// duplicating each translation across all segments that were merged into it.
+func expandByGroups(originalSegments []WhisperSegment, groups [][]int, mergedTranslations []TranslationItem) []TranslationItem {
+	// Map merged-group first-ID -> translation text
+	transMap := make(map[int]string, len(mergedTranslations))
+	for _, t := range mergedTranslations {
+		transMap[t.ID] = t.Text
+	}
+
+	// Map each original segment ID -> first ID of its group
+	segToGroupFirst := make(map[int]int, len(originalSegments))
+	for _, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		first := group[0]
+		for _, id := range group {
+			segToGroupFirst[id] = first
+		}
+	}
+
+	result := make([]TranslationItem, len(originalSegments))
+	for i, seg := range originalSegments {
+		result[i] = TranslationItem{
+			ID:   seg.ID,
+			Text: transMap[segToGroupFirst[seg.ID]],
+		}
+	}
+	return result
 }
 
 // validateTranslationAlignment checks if translation IDs match original segments.
