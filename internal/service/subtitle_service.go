@@ -338,8 +338,86 @@ func (s *SubtitleService) saveWhisperJSON(slug string, whisperResp *WhisperRespo
 	return os.WriteFile(jsonPath, data, 0644)
 }
 
-// translateSegmentsJSON translates segments using strict JSON format to ensure ID alignment.
+// translateSegmentsJSON translates segments using strict JSON format with fallback.
+// First tries batch translation, then expands merged translations by duplicating them,
+// and finally falls back to one-by-one if expansion fails.
 func (s *SubtitleService) translateSegmentsJSON(segments []WhisperSegment) ([]TranslationItem, error) {
+	// Try batch translation first (faster and often produces better merged translations)
+	result, err := s.translateSegmentsBatch(segments)
+	if err == nil && s.validateTranslationAlignment(segments, result) {
+		return result, nil
+	}
+
+	// If we got fewer translations (LLM merged segments), try to expand them
+	if err == nil && len(result) < len(segments) && len(result) > 0 {
+		expanded, expandErr := s.expandMergedTranslations(segments, result)
+		if expandErr == nil {
+			fmt.Printf("Successfully expanded %d merged translations to %d segments\n", len(result), len(expanded))
+			return expanded, nil
+		}
+		fmt.Printf("Failed to expand merged translations: %v\n", expandErr)
+	}
+
+	// Fallback to one-by-one translation for guaranteed alignment
+	fmt.Printf("Batch translation misaligned (%d segments -> %d translations), using one-by-one method...\n", len(segments), len(result))
+	return s.translateSegmentsOneByOne(segments)
+}
+
+// validateTranslationAlignment checks if translation IDs match original segments.
+func (s *SubtitleService) validateTranslationAlignment(segments []WhisperSegment, translations []TranslationItem) bool {
+	if len(translations) != len(segments) {
+		return false
+	}
+	for i, seg := range segments {
+		if i >= len(translations) || translations[i].ID != seg.ID {
+			return false
+		}
+	}
+	return true
+}
+
+// expandMergedTranslations duplicates merged translations across original segment IDs.
+// When LLM merges segments (e.g., ID 10+11 -> one translation with ID 10), this function
+// duplicates the merged translation to both segments, preserving translation quality while
+// maintaining timeline alignment.
+//
+// Example: segments [0,1,2,3,4,5] with translations [{id:0,text:"A"}, {id:3,text:"B"}]
+// becomes: [{id:0,text:"A"}, {id:1,text:"A"}, {id:2,text:"A"}, {id:3,text:"B"}, {id:4,text:"B"}, {id:5,text:"B"}]
+func (s *SubtitleService) expandMergedTranslations(segments []WhisperSegment, translations []TranslationItem) ([]TranslationItem, error) {
+	if len(translations) == 0 || len(segments) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+
+	result := make([]TranslationItem, len(segments))
+
+	// For each segment, find which translation covers it
+	for i, seg := range segments {
+		// Find the translation with the largest ID <= seg.ID
+		var foundTranslation *TranslationItem
+		for j := range translations {
+			if translations[j].ID <= seg.ID {
+				foundTranslation = &translations[j]
+			} else {
+				// Translations are expected to be sorted by ID, so we can break
+				break
+			}
+		}
+
+		if foundTranslation == nil {
+			return nil, fmt.Errorf("no translation found for segment ID %d", seg.ID)
+		}
+
+		result[i] = TranslationItem{
+			ID:   seg.ID,
+			Text: foundTranslation.Text,
+		}
+	}
+
+	return result, nil
+}
+
+// translateSegmentsBatch attempts to translate all segments in one API call.
+func (s *SubtitleService) translateSegmentsBatch(segments []WhisperSegment) ([]TranslationItem, error) {
 	// Build input JSON array
 	var input []TranslationItem
 	for _, seg := range segments {
@@ -361,9 +439,11 @@ Output format: [{"id": 0, "text": "翻译文本"}, {"id": 1, "text": "另一个�
 
 CRITICAL RULES:
 1. Keep the EXACT same IDs from input
-2. Translate ALL entries - do not skip any
-3. Return ONLY the JSON array, no markdown, no explanations
-4. Ensure valid JSON syntax`
+2. Output EXACTLY the same number of entries as input
+3. Do NOT merge multiple entries even if sentences seem incomplete
+4. Each ID must have EXACTLY ONE translation
+5. Translate each entry independently
+6. Return ONLY the JSON array, no markdown, no explanations`
 
 	translatedText, err := s.translateWithPrompt(string(inputJSON), systemPrompt)
 	if err != nil {
@@ -380,23 +460,30 @@ CRITICAL RULES:
 	// Parse translation JSON
 	var output []TranslationItem
 	if err := json.Unmarshal([]byte(translatedText), &output); err != nil {
-		return nil, fmt.Errorf("failed to parse translation JSON: %w\nResponse: %s", err, translatedText)
+		return nil, fmt.Errorf("failed to parse translation JSON: %w", err)
 	}
 
-	// Build ID map for quick lookup
-	idMap := make(map[int]string)
-	for _, t := range output {
-		idMap[t.ID] = t.Text
-	}
+	return output, nil
+}
 
-	// Build final result, ensuring all IDs are present
+// translateSegmentsOneByOne translates each segment individually for guaranteed alignment.
+func (s *SubtitleService) translateSegmentsOneByOne(segments []WhisperSegment) ([]TranslationItem, error) {
 	result := make([]TranslationItem, len(segments))
+
+	systemPrompt := "You are a professional subtitle translator. Translate the following subtitle text to Chinese. Even if the text seems incomplete or is just a fragment, translate it as-is. Return ONLY the translated text, no explanations."
+
 	for i, seg := range segments {
-		if translation, ok := idMap[seg.ID]; ok && translation != "" {
-			result[i] = TranslationItem{ID: seg.ID, Text: translation}
-		} else {
-			// Fallback to original text if translation missing
+		translated, err := s.translateWithPrompt(strings.TrimSpace(seg.Text), systemPrompt)
+		if err != nil {
+			// Fallback to original text on error
 			result[i] = TranslationItem{ID: seg.ID, Text: seg.Text}
+			fmt.Printf("Warning: failed to translate segment %d, using original text\n", seg.ID)
+			continue
+		}
+
+		result[i] = TranslationItem{
+			ID:   seg.ID,
+			Text: strings.TrimSpace(translated),
 		}
 	}
 
