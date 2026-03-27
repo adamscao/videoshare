@@ -339,12 +339,23 @@ func (s *SubtitleService) saveWhisperJSON(slug string, whisperResp *WhisperRespo
 }
 
 // translateSegmentsJSON translates segments using strict JSON format with fallback.
-// First tries batch translation, then falls back to one-by-one if alignment fails.
+// First tries batch translation, then expands merged translations by duplicating them,
+// and finally falls back to one-by-one if expansion fails.
 func (s *SubtitleService) translateSegmentsJSON(segments []WhisperSegment) ([]TranslationItem, error) {
-	// Try batch translation first (faster but may have alignment issues)
+	// Try batch translation first (faster and often produces better merged translations)
 	result, err := s.translateSegmentsBatch(segments)
 	if err == nil && s.validateTranslationAlignment(segments, result) {
 		return result, nil
+	}
+
+	// If we got fewer translations (LLM merged segments), try to expand them
+	if err == nil && len(result) < len(segments) && len(result) > 0 {
+		expanded, expandErr := s.expandMergedTranslations(segments, result)
+		if expandErr == nil {
+			fmt.Printf("Successfully expanded %d merged translations to %d segments\n", len(result), len(expanded))
+			return expanded, nil
+		}
+		fmt.Printf("Failed to expand merged translations: %v\n", expandErr)
 	}
 
 	// Fallback to one-by-one translation for guaranteed alignment
@@ -363,6 +374,46 @@ func (s *SubtitleService) validateTranslationAlignment(segments []WhisperSegment
 		}
 	}
 	return true
+}
+
+// expandMergedTranslations duplicates merged translations across original segment IDs.
+// When LLM merges segments (e.g., ID 10+11 -> one translation with ID 10), this function
+// duplicates the merged translation to both segments, preserving translation quality while
+// maintaining timeline alignment.
+//
+// Example: segments [0,1,2,3,4,5] with translations [{id:0,text:"A"}, {id:3,text:"B"}]
+// becomes: [{id:0,text:"A"}, {id:1,text:"A"}, {id:2,text:"A"}, {id:3,text:"B"}, {id:4,text:"B"}, {id:5,text:"B"}]
+func (s *SubtitleService) expandMergedTranslations(segments []WhisperSegment, translations []TranslationItem) ([]TranslationItem, error) {
+	if len(translations) == 0 || len(segments) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+
+	result := make([]TranslationItem, len(segments))
+
+	// For each segment, find which translation covers it
+	for i, seg := range segments {
+		// Find the translation with the largest ID <= seg.ID
+		var foundTranslation *TranslationItem
+		for j := range translations {
+			if translations[j].ID <= seg.ID {
+				foundTranslation = &translations[j]
+			} else {
+				// Translations are expected to be sorted by ID, so we can break
+				break
+			}
+		}
+
+		if foundTranslation == nil {
+			return nil, fmt.Errorf("no translation found for segment ID %d", seg.ID)
+		}
+
+		result[i] = TranslationItem{
+			ID:   seg.ID,
+			Text: foundTranslation.Text,
+		}
+	}
+
+	return result, nil
 }
 
 // translateSegmentsBatch attempts to translate all segments in one API call.
