@@ -72,23 +72,29 @@
    go mod tidy
    ```
 
-3. **创建必要的目录**
+3. **创建配置文件**
+   ```bash
+   cp config.yaml.example config.yaml
+   # 修改 session.secret、openai.api_key 等
+   ```
+
+4. **创建必要的目录**
    ```bash
    mkdir -p data/videos/{originals,hls,failed} data/import data/subtitles
    ```
 
-4. **初始化管理员账号**
+5. **初始化管理员账号**
    ```bash
    go run cmd/server/main.go -init-admin
    # 输入管理员用户名和密码
    ```
 
-5. **启动服务**
+6. **启动服务**
    ```bash
    go run cmd/server/main.go
    ```
 
-6. **访问系统**
+7. **访问系统**
    - 上传页面: http://localhost:8080/upload
    - 管理后台: http://localhost:8080/admin/login
 
@@ -323,7 +329,17 @@ subtitle:
    - 选择视频文件，填写标题描述
    - 上传完成后获得播放链接
 
-2. **观看视频**
+2. **使用 curl 上传**
+   ```bash
+   curl -F video=@movie.mp4 \
+        -F title="标题" -F description="描述" \
+        https://vshare.smartcubes.uk/api/upload
+   # → {"slug":"Ab3dEfGh","url":"https://vshare.smartcubes.uk/v/Ab3dEfGh"}
+   ```
+   - 可选字段：`password_protected=true` + `password=xxx`（密码保护）、`subtitle=@sub.vtt`（字幕）
+   - 返回后后台异步转码，可用 `GET /api/video/<slug>/status` 查询进度
+
+3. **观看视频**
    - 公开视频：直接观看
    - 受保护视频：输入密码后观看
 

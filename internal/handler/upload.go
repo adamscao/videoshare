@@ -126,8 +126,20 @@ func (h *UploadHandler) UploadVideo(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"slug": video.Slug,
-		"url":  "/v/" + video.Slug,
+		"url":  baseURL(c) + "/v/" + video.Slug,
 	})
+}
+
+// baseURL returns scheme://host of the request, honoring reverse proxy headers
+func baseURL(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	return scheme + "://" + c.Request.Host
 }
 
 func (h *UploadHandler) checkUploadPermission(c *gin.Context) bool {

@@ -399,7 +399,7 @@
                     const res = JSON.parse(xhr.responseText);
                     document.getElementById('result').innerHTML = `
                         <p>✅ ${t.uploadSuccess}</p>
-                        <p style="margin-top:10px;">${t.playLink}: <a href="${res.url}" target="_blank">${location.origin}${res.url}</a></p>
+                        <p style="margin-top:10px;">${t.playLink}: <a href="${res.url}" target="_blank">${res.url}</a></p>
                     `;
                     document.getElementById('result').style.display = 'block';
                     document.getElementById('uploadForm').reset();
